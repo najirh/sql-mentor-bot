@@ -1,7 +1,7 @@
 # SQL Mentor (Beta v1)
 
 <div align="center">
-  <img src="path/to/your/logo.png" alt="SQL Mentor Logo" width="200"/>
+  <img src=https://github.com/najirh/sql-mentor-bot/blob/main/sql_mentor_icon1.jpg alt="SQL Mentor Logo" width="200"/>
 </div>
 
 SQL Mentor is an advanced Discord bot designed to help users master SQL through interactive challenges, daily questions, and a competitive point-based system. Whether you're a beginner looking to learn SQL or an experienced developer aiming to sharpen your skills, SQL Mentor provides a fun and engaging platform to improve your database querying prowess.
