@@ -429,7 +429,7 @@ async def weekly_heroes(ctx):
         async with bot.db.acquire() as conn:
             week_start = await get_week_start()
             top_users = await conn.fetch('''
-                SELECT u.username, COUNT(*) as submissions, SUM(us.points) as points
+                SELECT u.user_id, u.username, COUNT(*) as submissions, SUM(us.points) as points
                 FROM user_submissions us
                 JOIN users u ON us.user_id = u.user_id
                 WHERE us.submitted_at >= $1
@@ -442,7 +442,11 @@ async def weekly_heroes(ctx):
             headers = ["Rank", "User", "Submissions", "Points", "Streak"]
             data = []
             for i, user in enumerate(top_users, 1):
-                streak = await get_user_streak(user['user_id'])
+                try:
+                    streak = await get_user_streak(user['user_id'])
+                except Exception as e:
+                    logging.error(f"Error getting streak for user {user['user_id']}: {e}")
+                    streak = 0
                 data.append((i, user['username'], user['submissions'], user['points'], f"{streak} days"))
             table = create_discord_table(headers, data)
             await ctx.send(f"🦸 Weekly Heroes 🦸\n{table}")
@@ -578,11 +582,16 @@ async def daily_question():
 async def update_leaderboard():
     try:
         async with bot.db.acquire() as conn:
-            top_users = await conn.fetch('SELECT user_id, points FROM leaderboard ORDER BY points DESC LIMIT 10')
+            top_users = await conn.fetch('''
+                SELECT u.username, l.points 
+                FROM leaderboard l
+                JOIN users u ON l.user_id = u.user_id
+                ORDER BY l.points DESC LIMIT 10
+            ''')
         
         if top_users:
-            headers = ["Rank", "User ID", "Points"]
-            data = [(i, user['user_id'], user['points']) for i, user in enumerate(top_users, 1)]
+            headers = ["Rank", "User", "Points"]
+            data = [(i, user['username'], user['points']) for i, user in enumerate(top_users, 1)]
             table = create_discord_table(headers, data)
             for channel_id in CHANNEL_IDS:
                 channel = bot.get_channel(channel_id)
