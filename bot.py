@@ -38,13 +38,7 @@ def create_discord_table(headers, data):
 
 async def create_db_pool():
     try:
-        bot.db = await asyncpg.create_pool(
-            host=os.getenv('DB_HOST'),
-            port=os.getenv('DB_PORT'),
-            user=os.getenv('DB_USER'),
-            password=os.getenv('DB_PASSWORD'),
-            database=os.getenv('DB_NAME')
-        )
+        bot.db = await asyncpg.create_pool(os.getenv('DATABASE_URL'))
         logging.info("Database connection established")
     except Exception as e:
         logging.error(f"Failed to connect to the database: {e}")
