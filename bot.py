@@ -331,24 +331,15 @@ async def help_command(ctx):
     `!medium` - Get a medium SQL question
     `!hard` - Get a hard SQL question
     `!topic <topic_name>` - Get a question based on a specific topic
-    `!skip` - Skip the current question (only one skip allowed per question)
     `!submit <answer>` - Submit your answer to the current question
     `!top_10` - Show top 10 users based on ranking
     `!weekly_heroes` - Show top 10 users based on weekly submissions and their current streak
-    `!report <question_id> <feedback>` - Report a question if you think it's incorrect
     `!my_stats` - View your personal statistics
     `!sql_battle` - Start an SQL battle with other users
     `!set_difficulty <difficulty>` - Set your preferred question difficulty
-    `!my_difficulty` - Check your current preferred difficulty
-    `!rate_question <question_id> <rating>` - Rate a question (1-5 stars)
-    `!question_stats <question_id>` - View statistics for a specific question
-    `!my_achievements` - View your earned achievements
 
     To submit an answer, use the `!submit` command followed by your SQL query.
     For example: `!submit SELECT * FROM users WHERE age > 18`
-
-    To report a question, use the `!report` command followed by the question ID and your feedback.
-    For example: `!report 1 The question is ambiguous and needs clarification.`
 
     Good luck and happy coding!
     """
@@ -828,24 +819,6 @@ async def set_difficulty(ctx, difficulty: str):
                    f"🔄 To reset your difficulty preference, use `!reset_preference`")
 
 @bot.command()
-async def my_difficulty(ctx):
-    user_id = ctx.author.id
-    async with bot.db.acquire() as conn:
-        difficulty = await conn.fetchval('''
-            SELECT preferred_difficulty FROM user_preferences
-            WHERE user_id = $1
-        ''', user_id)
-    
-    difficulty_emojis = {'easy': '🟢', 'medium': '🟡', 'hard': '🔴'}
-    
-    if difficulty:
-        emoji = difficulty_emojis.get(difficulty, '❓')
-        await ctx.send(f"{emoji} Your current preferred difficulty is: **{difficulty}**\n\n"
-                       f"Want to change? Use `!set_difficulty <easy/medium/hard>`")
-    else:
-        await ctx.send("❓ You haven't set a preferred difficulty yet. Use `!set_difficulty <easy/medium/hard>` to set one.")
-
-@bot.command()
 async def reset_preference(ctx):
     user_id = ctx.author.id
     try:
@@ -1203,22 +1176,6 @@ async def set_preference(ctx, *, preference=None):
     except Exception as e:
         logging.error(f"Error in set_preference command: {e}")
         await ctx.send("An error occurred while setting your preference. Please try again later.")
-
-@bot.command()
-async def reset_preference(ctx):
-    user_id = ctx.author.id
-    try:
-        async with bot.db.acquire() as conn:
-            await conn.execute('''
-                UPDATE user_preferences
-                SET preferred_difficulty = NULL
-                WHERE user_id = $1
-            ''', user_id)
-        await ctx.send("🔄 Your difficulty preference has been reset. You'll now receive questions from all difficulties.\n\n"
-                       "To set a new preference, use `!set_difficulty <easy/medium/hard>`")
-    except Exception as e:
-        logging.error(f"Error in reset_preference command: {e}")
-        await ctx.send("An error occurred while resetting your preference. Please try again later.")
 
 if __name__ == "__main__":
     required_vars = ['DATABASE_URL', 'DISCORD_TOKEN', 'CHANNEL_ID']
