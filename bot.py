@@ -38,11 +38,13 @@ def create_discord_table(headers, data):
 
 async def create_db_pool():
     try:
-        bot.db = await asyncpg.create_pool(os.getenv('DATABASE_URL'), ssl='require')
+        db_url = os.getenv('DATABASE_URL')
+        logging.info(f"Attempting to connect to database with URL: {db_url[:10]}...{db_url[-10:]}")
+        bot.db = await asyncpg.create_pool(db_url, ssl='require')
         logging.info("Database connection established")
     except Exception as e:
         logging.error(f"Failed to connect to the database: {e}")
-        raise  # Re-raise the exception to prevent the bot from continuing without a database
+        raise
 
 async def ensure_user_exists(user_id, username):
     async with bot.db.acquire() as conn:
@@ -247,8 +249,13 @@ async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     
     try:
+        logging.info("Attempting to create database pool...")
         await create_db_pool()
+        logging.info("Database pool created successfully")
+        
+        logging.info("Ensuring tables exist...")
         await ensure_tables_exist()
+        logging.info("Tables ensured")
         
         daily_question.start()
         update_leaderboard.start()
@@ -260,10 +267,10 @@ async def on_ready():
             if channel:
                 await channel.send("SQL Mentor is online!")
             else:
-                print(f"Could not find channel with ID {channel_id}")
+                logging.warning(f"Could not find channel with ID {channel_id}")
     except Exception as e:
-        logging.error(f"Error during startup: {e}")
-        await bot.close()  # Shutdown the bot if we can't connect to the database
+        logging.error(f"Error during startup: {e}", exc_info=True)
+        await bot.close()
 
 @bot.event
 async def on_error(event, *args, **kwargs):
@@ -833,7 +840,7 @@ async def check_achievements(user_id):
                 ("🎓 Beginner", stats['total_answers'] >= 10),
                 ("🏅 Intermediate", stats['total_answers'] >= 100),
                 ("🏆 Expert", stats['total_answers'] >= 1000),
-                ("���� Sharpshooter", stats['correct_answers'] >= 50),
+                (" Sharpshooter", stats['correct_answers'] >= 50),
                 ("👑 SQL Master", stats['correct_answers'] >= 500)
             ]
             
@@ -1039,8 +1046,13 @@ async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     
     try:
+        logging.info("Attempting to create database pool...")
         await create_db_pool()
+        logging.info("Database pool created successfully")
+        
+        logging.info("Ensuring tables exist...")
         await ensure_tables_exist()
+        logging.info("Tables ensured")
         
         daily_question.start()
         update_leaderboard.start()
@@ -1052,10 +1064,10 @@ async def on_ready():
             if channel:
                 await channel.send("SQL Mentor is online!")
             else:
-                print(f"Could not find channel with ID {channel_id}")
+                logging.warning(f"Could not find channel with ID {channel_id}")
     except Exception as e:
-        logging.error(f"Error during startup: {e}")
-        await bot.close()  # Shutdown the bot if we can't connect to the database
+        logging.error(f"Error during startup: {e}", exc_info=True)
+        await bot.close()
 
 @bot.event
 async def on_error(event, *args, **kwargs):
@@ -1110,4 +1122,7 @@ async def post_achievement_announcement(user_id, new_achievements):
             await channel.send(announcement)
 
 if __name__ == "__main__":
+    if not os.getenv('DATABASE_URL'):
+        logging.error("DATABASE_URL is not set in the environment variables")
+        raise ValueError("DATABASE_URL must be set")
     bot.run(os.getenv('DISCORD_TOKEN'))
