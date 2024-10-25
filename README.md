@@ -23,10 +23,10 @@ SQL Mentor is an advanced Discord bot designed to help users master SQL through 
 
 Become part of our thriving SQL learning community by joining our Discord server:
 
-[Join SQL Mentor Discord](https://discord.gg/your-invite-link-here)
+[Join SQL Mentor Discord](https://discord.gg/36h5f2Z5PK)
 
 <div align="center">
-  <img src="path/to/your/community_image.png" alt="SQL Mentor Community" width="600"/>
+  <img src=https://github.com/najirh/sql-mentor-bot/blob/main/sql_mentor_banner.jpg alt="SQL Mentor Community" width="600"/>
 </div>
 
 ### Basic Commands
