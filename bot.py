@@ -51,7 +51,7 @@ async def create_db_pool():
 
             database_url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
 
-        logging.info(f"Attempting to connect to database")
+        logging.info(f"Attempting to connect to database using URL: {database_url}")
         
         bot.db = await asyncpg.create_pool(database_url, ssl='require')
         logging.info("Database connection established")
@@ -1129,7 +1129,7 @@ for key, value in os.environ.items():
     print(f"{key}: {value}")
 
 if __name__ == "__main__":
-    required_vars = ['DATABASE_URL', 'DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DISCORD_TOKEN', 'CHANNEL_ID']
+    required_vars = ['DATABASE_URL', 'DISCORD_TOKEN', 'CHANNEL_ID']
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     
     if missing_vars:
