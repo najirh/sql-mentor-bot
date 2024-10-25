@@ -1133,7 +1133,9 @@ if __name__ == "__main__":
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     
     if missing_vars:
-        logging.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+        print(f"Missing required environment variables: {', '.join(missing_vars)}")
+        for var in required_vars:
+            print(f"{var}: {os.getenv(var)}")
         raise ValueError("Missing required environment variables")
     
     bot.run(os.getenv('DISCORD_TOKEN'))
