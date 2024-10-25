@@ -215,16 +215,6 @@ async def submit(ctx, *, answer):
                        f"You've earned {points} points! 🌟\n"
                        f"Keep up the fantastic work, SQL wizard! 🧙‍♂️✨")
         user_attempts[user_id] = 0  # Reset attempts
-        
-        try:
-            new_achievements, all_achievements = await check_achievements(user_id)
-            if new_achievements:
-                await post_achievement_announcement(user_id, new_achievements)
-            
-            if all_achievements:
-                await ctx.send(f"Your current achievements: {', '.join(all_achievements)}")
-        except Exception as e:
-            logging.error(f"Error processing achievements: {e}")
     else:
         points = -10  # Reduce points for incorrect answers
         user_attempts[user_id] = user_attempts.get(user_id, 0) + 1
@@ -988,7 +978,7 @@ async def ensure_tables_exist():
                     user_id BIGINT NOT NULL,
                     question_id INTEGER,
                     points INTEGER NOT NULL,
-                    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    submitted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
 
                 CREATE TABLE IF NOT EXISTS weekly_points (
