@@ -63,21 +63,22 @@ async def ensure_user_exists(user_id, username):
         logging.error(f"Error ensuring user exists: {e}")
         raise
 
-async def get_question(difficulty=None, user_id=None):
+async def get_question(difficulty=None, user_id=None, topic=None):
     try:
-        logging.info(f"Fetching question for user_id: {user_id}, difficulty: {difficulty}")
+        logging.info(f"Fetching question for user_id: {user_id}, difficulty: {difficulty}, topic: {topic}")
         async with bot.db.acquire() as conn:
             query = '''
                 SELECT q.* FROM questions q
                 LEFT JOIN user_submissions us ON q.id = us.question_id AND us.user_id = $1
                 LEFT JOIN reports r ON q.id = r.question_id
-                WHERE us.question_id IS NULL 
+                WHERE (us.question_id IS NULL OR us.points <= 0)
                 AND r.question_id IS NULL
                 AND ($2::VARCHAR IS NULL OR q.difficulty = $2::VARCHAR)
+                AND ($3::VARCHAR IS NULL OR q.topic = $3::VARCHAR)
                 ORDER BY RANDOM() LIMIT 1
             '''
             logging.info(f"Executing query: {query}")
-            question = await conn.fetchrow(query, user_id, difficulty)
+            question = await conn.fetchrow(query, user_id, difficulty, topic)
         logging.info(f"Fetched question: {question}")
         return question
     except Exception as e:
@@ -383,18 +384,25 @@ async def get_difficulty_question(ctx, difficulty):
 @bot.command()
 async def question(ctx):
     user_id = ctx.author.id
-    async with bot.db.acquire() as conn:
-        difficulty = await conn.fetchval('''
-            SELECT preferred_difficulty FROM user_preferences
-            WHERE user_id = $1
-        ''', user_id)
-    
-    question = await get_question(difficulty, user_id)
-    if question:
-        user_questions[user_id] = question
-        await display_question(ctx, question)
-    else:
-        await ctx.send("Sorry, no questions available at the moment.")
+    username = str(ctx.author)
+    await ensure_user_exists(user_id, username)
+
+    try:
+        async with bot.db.acquire() as conn:
+            preference = await conn.fetchval('''
+                SELECT preferred_difficulty FROM user_preferences
+                WHERE user_id = $1
+            ''', user_id)
+        
+        question = await get_question(difficulty=preference, user_id=user_id)
+        if question:
+            user_questions[user_id] = question
+            await display_question(ctx, question)
+        else:
+            await ctx.send("Sorry, no questions available at the moment.")
+    except Exception as e:
+        logging.error(f"Error in question command: {e}")
+        await ctx.send("An error occurred while fetching a question. Please try again later.")
 
 @bot.command()
 async def try_again(ctx):
@@ -1135,6 +1143,56 @@ async def get_topic_question(ctx, topic):
 
 def get_ist_time():
     return datetime.now(timezone(timedelta(hours=5, minutes=30)))
+
+@bot.command()
+async def set_preference(ctx, *, preference=None):
+    user_id = ctx.author.id
+    username = str(ctx.author)
+    await ensure_user_exists(user_id, username)
+
+    try:
+        difficulties = ['easy', 'medium', 'hard']
+
+        if not preference:
+            difficulty_options = ", ".join(difficulties)
+            await ctx.send(f"Available difficulties: {difficulty_options}\n"
+                           f"To set your preference, use `!set_preference <difficulty>`")
+            return
+
+        if preference.lower() not in difficulties:
+            difficulty_options = ", ".join(difficulties)
+            await ctx.send(f"Invalid preference. Available options are: {difficulty_options}\n"
+                           f"Please try again with a valid option.")
+            return
+
+        async with bot.db.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO user_preferences (user_id, preferred_difficulty)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id) DO UPDATE SET preferred_difficulty = $2
+            ''', user_id, preference.lower())
+
+        await ctx.send(f"Your preferred difficulty has been set to '{preference}'. "
+                       f"You can reset it anytime using the `!reset_preference` command.")
+
+    except Exception as e:
+        logging.error(f"Error in set_preference command: {e}")
+        await ctx.send("An error occurred while setting your preference. Please try again later.")
+
+@bot.command()
+async def reset_preference(ctx):
+    user_id = ctx.author.id
+    try:
+        async with bot.db.acquire() as conn:
+            await conn.execute('''
+                UPDATE user_preferences
+                SET preferred_difficulty = NULL
+                WHERE user_id = $1
+            ''', user_id)
+        await ctx.send("Your difficulty preference has been reset. You'll now receive questions from all difficulties.")
+    except Exception as e:
+        logging.error(f"Error in reset_preference command: {e}")
+        await ctx.send("An error occurred while resetting your preference. Please try again later.")
 
 if __name__ == "__main__":
     required_vars = ['DATABASE_URL', 'DISCORD_TOKEN', 'CHANNEL_ID']
