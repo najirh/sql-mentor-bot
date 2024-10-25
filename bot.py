@@ -51,24 +51,30 @@ async def create_db_pool():
         raise
 
 async def ensure_user_exists(user_id, username):
-    async with bot.db.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO users (user_id, username)
-            VALUES ($1, $2)
-            ON CONFLICT (user_id) DO NOTHING
-        ''', user_id, username)
+    try:
+        async with bot.db.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO users (user_id, username)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id) DO NOTHING
+            ''', user_id, username)
+    except Exception as e:
+        logging.error(f"Error ensuring user exists: {e}")
+        raise
 
 async def get_question(difficulty=None, user_id=None):
     try:
         logging.info(f"Fetching question for user_id: {user_id}, difficulty: {difficulty}")
         async with bot.db.acquire() as conn:
-            question = await conn.fetchrow('''
+            query = '''
                 SELECT q.* FROM questions q
                 LEFT JOIN user_submissions us ON q.id = us.question_id AND us.user_id = $1
                 WHERE us.question_id IS NULL AND ($2::VARCHAR IS NULL OR q.difficulty = $2::VARCHAR)
                 ORDER BY RANDOM() LIMIT 1
-            ''', user_id, difficulty)
-        logging.info(f"Fetched question ID: {question['id'] if question else None}")
+            '''
+            logging.info(f"Executing query: {query}")
+            question = await conn.fetchrow(query, user_id, difficulty)
+        logging.info(f"Fetched question: {question}")
         return question
     except Exception as e:
         logging.error(f"Error fetching question: {e}")
@@ -78,42 +84,58 @@ async def get_week_start():
     return datetime.now().date() - timedelta(days=datetime.now().weekday())
 
 async def update_weekly_points(user_id, points):
-    async with bot.db.acquire() as conn:
-        week_start = await get_week_start()
-        await conn.execute('''
-            INSERT INTO weekly_points (user_id, points, week_start)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (user_id, week_start)
-            DO UPDATE SET points = weekly_points.points + EXCLUDED.points
-        ''', user_id, points, week_start)
+    try:
+        async with bot.db.acquire() as conn:
+            week_start = await get_week_start()
+            await conn.execute('''
+                INSERT INTO weekly_points (user_id, points, week_start)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (user_id, week_start)
+                DO UPDATE SET points = weekly_points.points + EXCLUDED.points
+            ''', user_id, points, week_start)
+    except Exception as e:
+        logging.error(f"Error updating weekly points: {e}")
+        raise
 
 async def get_weekly_points(user_id):
-    async with bot.db.acquire() as conn:
-        week_start = await get_week_start()
-        points = await conn.fetchval('''
-            SELECT COALESCE(points, 0)
-            FROM weekly_points
-            WHERE user_id = $1 AND week_start = $2
-        ''', user_id, week_start)
-    return points
+    try:
+        async with bot.db.acquire() as conn:
+            week_start = await get_week_start()
+            points = await conn.fetchval('''
+                SELECT COALESCE(points, 0)
+                FROM weekly_points
+                WHERE user_id = $1 AND week_start = $2
+            ''', user_id, week_start)
+        return points
+    except Exception as e:
+        logging.error(f"Error getting weekly points: {e}")
+        return 0
 
 async def get_daily_points(user_id, date):
-    async with bot.db.acquire() as conn:
-        points = await conn.fetchval('''
-            SELECT COALESCE(points, 0)
-            FROM daily_points
-            WHERE user_id = $1 AND date = $2
-        ''', user_id, date)
-    return points
+    try:
+        async with bot.db.acquire() as conn:
+            points = await conn.fetchval('''
+                SELECT COALESCE(points, 0)
+                FROM daily_points
+                WHERE user_id = $1 AND date = $2
+            ''', user_id, date)
+        return points
+    except Exception as e:
+        logging.error(f"Error getting daily points: {e}")
+        return 0
 
 async def update_daily_points(user_id, date, points):
-    async with bot.db.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO daily_points (user_id, date, points)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (user_id, date)
-            DO UPDATE SET points = daily_points.points + EXCLUDED.points
-        ''', user_id, date, points)
+    try:
+        async with bot.db.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO daily_points (user_id, date, points)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (user_id, date)
+                DO UPDATE SET points = daily_points.points + EXCLUDED.points
+            ''', user_id, date, points)
+    except Exception as e:
+        logging.error(f"Error updating daily points: {e}")
+        raise
 
 async def display_question(ctx, question):
     points = {'easy': 60, 'medium': 80, 'hard': 120}.get(question['difficulty'], 0)
@@ -124,7 +146,7 @@ async def display_question(ctx, question):
 async def check_daily_limit(ctx, user_id):
     today = datetime.now().date()
     daily_points = await get_daily_points(user_id, today)
-    if daily_points <= -50:
+    if daily_points is None or daily_points <= -50:
         await ctx.send("You've reached the daily point limit. Please try again tomorrow! 🌙")
         return False
     return True
@@ -134,15 +156,15 @@ async def check_daily_limit(ctx, user_id):
 async def sql_question_command(ctx):
     user_id = ctx.author.id
     username = str(ctx.author)
-    await ensure_user_exists(user_id, username)
-
-    if not await check_daily_limit(ctx, user_id):
-        return
-
     try:
+        await ensure_user_exists(user_id, username)
+
+        if not await check_daily_limit(ctx, user_id):
+            return
+
         question = await get_question(user_id=user_id)
         if question:
-            user_questions[user_id] = question  # Store the question for the user
+            user_questions[user_id] = question
             logging.info(f"Stored question for user {user_id}: {question}")
             await display_question(ctx, question)
         else:
@@ -253,7 +275,7 @@ async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     
     try:
-        await create_db_pool()
+        await wait_for_db()
         await ensure_tables_exist()
         
         daily_question.start()
@@ -915,107 +937,92 @@ async def get_user_streak(user_id):
     return streak
 
 async def ensure_tables_exist():
-    async with bot.db.acquire() as conn:
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS questions (
-                id SERIAL PRIMARY KEY,
-                question TEXT NOT NULL,
-                answer TEXT NOT NULL,
-                datasets TEXT,
-                difficulty VARCHAR(25) NOT NULL,
-                hint TEXT,
-                topic TEXT
-            );
+    try:
+        async with bot.db.acquire() as conn:
+            await conn.execute('''
+                -- Create tables if they don't exist
+                CREATE TABLE IF NOT EXISTS questions (
+                    id SERIAL PRIMARY KEY,
+                    question TEXT NOT NULL,
+                    answer TEXT NOT NULL,
+                    datasets TEXT,
+                    difficulty VARCHAR(25) NOT NULL,
+                    hint TEXT,
+                    topic TEXT,
+                    category TEXT
+                );
 
-            CREATE TABLE IF NOT EXISTS reports (
-                id SERIAL PRIMARY KEY,
-                reported_by BIGINT NOT NULL,
-                question_id INTEGER,
-                remarks TEXT NOT NULL,
-                reported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
+                CREATE TABLE IF NOT EXISTS reports (
+                    id SERIAL PRIMARY KEY,
+                    reported_by BIGINT NOT NULL,
+                    question_id INTEGER,
+                    remarks TEXT NOT NULL,
+                    reported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
 
-            CREATE TABLE IF NOT EXISTS leaderboard (
-                user_id BIGINT PRIMARY KEY,
-                points INTEGER DEFAULT 0
-            );
+                CREATE TABLE IF NOT EXISTS leaderboard (
+                    user_id BIGINT PRIMARY KEY,
+                    points INTEGER DEFAULT 0
+                );
 
-            CREATE TABLE IF NOT EXISTS user_submissions (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                question_id INTEGER,
-                points INTEGER NOT NULL,
-                submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
+                CREATE TABLE IF NOT EXISTS user_submissions (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    question_id INTEGER,
+                    points INTEGER NOT NULL,
+                    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
 
-            CREATE TABLE IF NOT EXISTS weekly_points (
-                user_id BIGINT NOT NULL,
-                points INTEGER DEFAULT 0,
-                week_start DATE NOT NULL,
-                PRIMARY KEY (user_id, week_start)
-            );
+                CREATE TABLE IF NOT EXISTS weekly_points (
+                    user_id BIGINT NOT NULL,
+                    points INTEGER DEFAULT 0,
+                    week_start DATE NOT NULL,
+                    PRIMARY KEY (user_id, week_start)
+                );
 
-            CREATE TABLE IF NOT EXISTS users (
-                user_id BIGINT PRIMARY KEY,
-                username TEXT
-            );
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id BIGINT PRIMARY KEY,
+                    username TEXT
+                );
 
-            CREATE TABLE IF NOT EXISTS user_challenges (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                total_questions INTEGER NOT NULL,
-                correct_answers INTEGER NOT NULL,
-                time_taken FLOAT NOT NULL,
-                completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+                CREATE TABLE IF NOT EXISTS user_challenges (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    total_questions INTEGER NOT NULL,
+                    correct_answers INTEGER NOT NULL,
+                    time_taken FLOAT NOT NULL,
+                    completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
 
-        # Add the topic column if it doesn't exist
-        await conn.execute('''
-            ALTER TABLE questions
-            ADD COLUMN IF NOT EXISTS topic TEXT;
-        ''')
+                CREATE TABLE IF NOT EXISTS user_preferences (
+                    user_id BIGINT PRIMARY KEY,
+                    preferred_difficulty VARCHAR(10)
+                );
 
-        # Add the category column if it doesn't exist
-        await conn.execute('''
-            ALTER TABLE questions
-            ADD COLUMN IF NOT EXISTS category TEXT;
-        ''')
+                CREATE TABLE IF NOT EXISTS question_ratings (
+                    user_id BIGINT,
+                    question_id INTEGER,
+                    rating INTEGER CHECK (rating >= 1 AND rating <= 5),
+                    PRIMARY KEY (user_id, question_id)
+                );
 
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS user_preferences (
-                user_id BIGINT PRIMARY KEY,
-                preferred_difficulty VARCHAR(10)
-            )
-        ''')
-        
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS question_ratings (
-                user_id BIGINT,
-                question_id INTEGER,
-                rating INTEGER CHECK (rating >= 1 AND rating <= 5),
-                PRIMARY KEY (user_id, question_id)
-            )
-        ''')
-        
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS user_achievements (
-                user_id BIGINT,
-                achievement VARCHAR(50),
-                earned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (user_id, achievement)
-            )
-        ''')
+                CREATE TABLE IF NOT EXISTS user_achievements (
+                    user_id BIGINT,
+                    achievement VARCHAR(50),
+                    earned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, achievement)
+                );
 
-        # Add this to your ensure_tables_exist function
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS daily_points (
-                user_id BIGINT,
-                date DATE,
-                points INT,
-                PRIMARY KEY (user_id, date)
-            );
-        ''')
+                CREATE TABLE IF NOT EXISTS daily_points (
+                    user_id BIGINT,
+                    date DATE,
+                    points INT,
+                    PRIMARY KEY (user_id, date)
+                );
+            ''')
+    except Exception as e:
+        logging.error(f"Error ensuring tables exist: {e}")
+        raise
 
 async def wait_for_db():
     max_retries = 10
@@ -1045,7 +1052,7 @@ async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     
     try:
-        await create_db_pool()
+        await wait_for_db()
         await ensure_tables_exist()
         
         daily_question.start()
@@ -1114,10 +1121,6 @@ async def post_achievement_announcement(user_id, new_achievements):
         channel = bot.get_channel(channel_id)
         if channel:
             await channel.send(announcement)
-
-print("All environment variables:")
-for key, value in os.environ.items():
-    print(f"{key}: {value}")
 
 if __name__ == "__main__":
     required_vars = ['DATABASE_URL', 'DISCORD_TOKEN', 'CHANNEL_ID']
