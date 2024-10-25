@@ -1,66 +1,84 @@
-# SQL Mentor (beta v1) by Zero Analyst
+# SQL Mentor (Beta v1)
 
 <div align="center">
   <img src="path/to/your/logo.png" alt="SQL Mentor Logo" width="200"/>
 </div>
 
-SQL Mentor is a Discord bot designed to help users practice and improve their SQL skills through interactive challenges and a point-based system.
+SQL Mentor is an advanced Discord bot designed to help users master SQL through interactive challenges, daily questions, and a competitive point-based system. Whether you're a beginner looking to learn SQL or an experienced developer aiming to sharpen your skills, SQL Mentor provides a fun and engaging platform to improve your database querying prowess.
 
-## Join Our Community
+## Features
 
-Join our Discord community to interact with SQL Mentor and other learners:
-[Discord Invitation Link](https://discord.gg/your-invite-link-here)
+- 🎯 Daily SQL challenges across multiple difficulty levels
+- 📚 Topic-specific questions to focus on particular SQL concepts
+- 🏆 Competitive leaderboard and weekly recognition system
+- 🔄 User-specific difficulty preferences and progress tracking
+- ⚔️ Real-time SQL battles for head-to-head competition
+- 🌟 Achievement system to reward consistent learning and improvement
+- 📊 Comprehensive statistics to monitor your progress
+- 🛠️ Community-driven question reporting and rating system
+
+## Getting Started
+
+### Join Our Community
+
+Become part of our thriving SQL learning community by joining our Discord server:
+
+[Join SQL Mentor Discord](https://discord.gg/your-invite-link-here)
 
 <div align="center">
   <img src="path/to/your/community_image.png" alt="SQL Mentor Community" width="600"/>
 </div>
 
-## Features
+### Basic Commands
 
-- Daily SQL questions
-- Difficulty levels: Easy, Medium, Hard
-- Point system and leaderboard
-- Weekly challenges and heroes
-- Ability to report questions for improvement
-
-## Commands
-
-- `!help`: Display all available commands
-- `!interview`: Get a random SQL question
-- `!easy`: Get an easy SQL question
-- `!medium`: Get a medium SQL question
-- `!hard`: Get a hard SQL question
-- `!skip`: Skip the current question (only one skip allowed per question)
+- `!sql`: Get a random SQL question
+- `!easy`, `!medium`, `!hard`: Request a question of specific difficulty
+- `!topic <topic_name>`: Get a question on a specific SQL topic
 - `!submit <answer>`: Submit your answer to the current question
-- `!my_scores`: Display your current score
-- `!top_10`: Show top 10 users based on ranking
-- `!weekly_heroes`: Show top 10 users based on weekly submissions and their current streak
-- `!report <question_id> <feedback>`: Report a question if you think it's incorrect
+- `!top_10`: View the current leaderboard
+- `!my_stats`: Check your personal progress and achievements
 
-## How to Use
+For a full list of commands, use `!help` in the Discord server.
 
-1. Join our Discord server using the invitation link above.
-2. Use `!interview` or difficulty-specific commands to get a question.
-3. Analyze the question and dataset provided.
-4. Use `!submit` followed by your SQL query to answer the question.
-5. If you need to skip a question, use `!skip` (remember, only one skip per question is allowed).
-6. Check your progress with `!my_scores` and see how you rank with `!top_10`.
-7. Participate in weekly challenges and aim to become a Weekly Hero!
+## How to Use SQL Mentor
 
-## Setup for Developers
+1. **Join the Server**: Use the invitation link to join our Discord community.
+2. **Get a Question**: Use `!sql` or difficulty-specific commands to receive a question.
+3. **Analyze and Solve**: Study the question and provided dataset carefully.
+4. **Submit Your Answer**: Use `!submit` followed by your SQL query to answer.
+5. **Track Your Progress**: Check your stats and ranking with `!my_stats` and `!top_10`.
+6. **Compete and Learn**: Participate in daily challenges and SQL battles to test your skills against others.
+7. **Provide Feedback**: Rate questions and report any issues to help improve the system.
 
-If you want to run your own instance of SQL Mentor:
+## For Developers
 
-1. Clone this repository
-2. Copy `.env.example` to `.env` and fill in your own values
-3. Install dependencies: `pip install -r requirements.txt`
+If you're interested in running your own instance of SQL Mentor or contributing to the project:
+
+1. Clone the repository: `git clone https://github.com/your-username/sql-mentor.git`
+2. Install dependencies: `pip install -r requirements.txt`
+3. Set up environment variables (see [Environment Variables](#environment-variables) section)
 4. Run the bot: `python bot.py`
 
-For detailed setup instructions, including Docker deployment, please refer to our [Setup Guide](link-to-setup-guide-if-you-have-one).
+### Environment Variables
+
+Create a `.env` file in the root directory with the following variables:
+
+DATABASE_URL=your_postgresql_database_url
+DISCORD_TOKEN=your_discord_bot_token
+CHANNEL_ID=comma_separated_list_of_channel_ids
 
 ## Contributing
 
-We welcome contributions! If you have suggestions for new features, improvements, or have found a bug, please open an issue or submit a pull request.
+We welcome contributions to SQL Mentor! Here's how you can contribute:
+
+1. Fork the repository
+2. Create a new branch for your feature or bug fix
+3. Write your code, ensuring it follows our coding standards
+4. Add or update tests as necessary
+5. Update documentation to reflect your changes
+6. Submit a pull request with a clear description of your changes
+
+Please refer to our [Contribution Guidelines](link-to-contribution-guidelines) for more detailed information.
 
 ## License
 
