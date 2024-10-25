@@ -3,6 +3,7 @@ import discord
 from discord.ext import commands, tasks
 import asyncpg
 from dotenv import load_dotenv
+from datetime import timezone, timedelta
 from datetime import datetime, time, timedelta
 import logging
 import asyncio
@@ -69,7 +70,10 @@ async def get_question(difficulty=None, user_id=None):
             query = '''
                 SELECT q.* FROM questions q
                 LEFT JOIN user_submissions us ON q.id = us.question_id AND us.user_id = $1
-                WHERE us.question_id IS NULL AND ($2::VARCHAR IS NULL OR q.difficulty = $2::VARCHAR)
+                LEFT JOIN reports r ON q.id = r.question_id
+                WHERE us.question_id IS NULL 
+                AND r.question_id IS NULL
+                AND ($2::VARCHAR IS NULL OR q.difficulty = $2::VARCHAR)
                 ORDER BY RANDOM() LIMIT 1
             '''
             logging.info(f"Executing query: {query}")
@@ -144,12 +148,25 @@ async def display_question(ctx, question):
     await ctx.send(f"Here's a {question['difficulty'].upper()} question (worth {points} points):\n\n{question['question']}\n\nDataset:\n```\n{question['datasets']}\n```\n\n⏳ You have {time_limit} minutes to answer this question.\nTo submit your answer, use the `!submit` command followed by your SQL query.")
 
 async def check_daily_limit(ctx, user_id):
-    today = datetime.now().date()
+    today = get_ist_time().date()
     daily_points = await get_daily_points(user_id, today)
-    if daily_points is None or daily_points <= -50:
-        await ctx.send("You've reached the daily point limit. Please try again tomorrow! 🌙")
+    daily_submissions = await get_daily_submissions(user_id, today)
+    if daily_points <= -50 or daily_submissions >= 10:
+        await ctx.send("You've reached the daily limit. Please try again tomorrow! 🌙")
         return False
     return True
+
+async def get_daily_submissions(user_id, date):
+    try:
+        async with bot.db.acquire() as conn:
+            submissions = await conn.fetchval('''
+                SELECT COUNT(*) FROM user_submissions
+                WHERE user_id = $1 AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
+            ''', user_id, date)
+        return submissions
+    except Exception as e:
+        logging.error(f"Error getting daily submissions: {e}")
+        return 0
 
 @bot.command(name='sql')
 @cooldown(1, 60, BucketType.user)
@@ -158,19 +175,22 @@ async def sql_question_command(ctx):
     username = str(ctx.author)
     try:
         await ensure_user_exists(user_id, username)
+        logging.info(f"User {user_id} ({username}) requested a SQL question")
 
         if not await check_daily_limit(ctx, user_id):
+            logging.info(f"User {user_id} has reached their daily limit")
             return
 
         question = await get_question(user_id=user_id)
         if question:
             user_questions[user_id] = question
-            logging.info(f"Stored question for user {user_id}: {question}")
+            logging.info(f"Stored question for user {user_id}: {question['id']}")
             await display_question(ctx, question)
         else:
+            logging.warning(f"No questions available for user {user_id}")
             await ctx.send("Sorry, no questions available at the moment.")
     except Exception as e:
-        logging.error(f"Error in sql command: {e}")
+        logging.error(f"Error in sql command for user {user_id}: {e}", exc_info=True)
         await ctx.send("An error occurred while fetching a question. Please try again later.")
 
 @sql_question_command.error
@@ -216,12 +236,12 @@ async def submit(ctx, *, answer):
                            f"You've lost {abs(points)} points. 📉\n"
                            f"Keep practicing and you'll improve!")
 
-    today = datetime.now().date()
+    today = get_ist_time().date()
     async with bot.db.acquire() as conn:
         await conn.execute('''
             INSERT INTO user_submissions (user_id, question_id, submitted_at, points)
             VALUES ($1, $2, $3, $4)
-        ''', user_id, question['id'], datetime.now(), points)
+        ''', user_id, question['id'], get_ist_time(), points)
         
         await update_weekly_points(user_id, points)
         await update_daily_points(user_id, today, points)
@@ -273,22 +293,14 @@ async def reset_daily_points():
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
-    
     try:
         await wait_for_db()
         await ensure_tables_exist()
         
-        daily_question.start()
+        daily_task.start()
+        daily_challenge.start()
         update_leaderboard.start()
-        post_weekly_heroes.start()
-        reset_daily_points.start()
-
-        for channel_id in CHANNEL_IDS:
-            channel = bot.get_channel(channel_id)
-            if channel:
-                await channel.send("SQL Mentor is online!")
-            else:
-                logging.warning(f"Could not find channel with ID {channel_id}")
+        challenge_time_over.start()
     except Exception as e:
         logging.error(f"Error during startup: {e}", exc_info=True)
         await bot.close()
@@ -303,8 +315,6 @@ async def on_command_error(ctx, error):
         await ctx.send("Invalid command. Use `!help` to see available commands.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("You're missing a required argument. Check `!help` for command usage.")
-    elif isinstance(error, AttributeError) and "'Bot' object has no attribute 'db'" in str(error):
-        await ctx.send("The bot is currently unable to connect to the database. Please try again later or contact the administrator.")
     else:
         logging.error(f"Unhandled error: {error}", exc_info=True)
         await ctx.send("An unexpected error occurred. Please try again later or contact the administrator.")
@@ -544,7 +554,7 @@ async def list_categories(ctx):
         await ctx.send("⚠️ Oops! Our category finder is taking a coffee break.\n"
                        "Please try again later when it's caffeinated! ☕")
 
-@tasks.loop(time=time(hour=18))  # 6 PM UTC
+@tasks.loop(time=time(hour=23, minute=30))  # 11:30 PM IST
 async def daily_question():
     global current_question
     try:
@@ -564,7 +574,7 @@ async def daily_question():
     except Exception as e:
         logging.error(f"Error in daily_question task: {e}")
 
-@tasks.loop(time=time(hour=22))  # 10 PM UTC
+@tasks.loop(time=time(hour=3, minute=30))  # 3:30 AM IST (10 PM UTC)
 async def update_leaderboard():
     try:
         async with bot.db.acquire() as conn:
@@ -581,39 +591,41 @@ async def update_leaderboard():
     except Exception as e:
         logging.error(f"Error in update_leaderboard task: {e}")
 
-@tasks.loop(time=time(hour=22))  # 10 PM UTC
-async def post_weekly_heroes():
-    if datetime.now().weekday() == 6:  # Sunday
-        try:
-            async with bot.db.acquire() as conn:
-                week_start = await get_week_start()
-                top_users = await conn.fetch('''
-                    SELECT user_id, COUNT(*) as submissions, SUM(points) as points
-                    FROM user_submissions
-                    WHERE submitted_at >= $1
-                    GROUP BY user_id
-                    ORDER BY submissions DESC, points DESC
-                    LIMIT 10
-                ''', week_start)
-            
-            if top_users:
-                headers = ["Rank", "User ID", "Submissions", "Points", "Streak"]
-                data = []
-                for i, user in enumerate(top_users, 1):
-                    streak = await get_user_streak(user['user_id'])
-                    data.append((i, user['user_id'], user['submissions'], user['points'], f"{streak} days"))
-                table = create_discord_table(headers, data)
-                for channel_id in CHANNEL_IDS:
-                    channel = bot.get_channel(channel_id)
-                    if channel:
-                        await channel.send(f"🦸 Weekly Heroes 🦸\n{table}")
-            else:
-                for channel_id in CHANNEL_IDS:
-                    channel = bot.get_channel(channel_id)
-                    if channel:
-                        await channel.send("No submissions this week. Let's see some heroes next week!")
-        except Exception as e:
-            logging.error(f"Error in post_weekly_heroes task: {e}")
+@tasks.loop(time=time(hour=17, minute=30))  # 5:30 PM IST
+async def daily_challenge():
+    try:
+        question = await get_question()
+        if question:
+            challenge_message = (
+                "🌟 Daily SQL Challenge 🌟\n\n"
+                f"Here's today's challenge (worth 150 points):\n\n"
+                f"{question['question']}\n\n"
+                f"Dataset:\n```\n{question['datasets']}\n```\n\n"
+                "⏳ You have 4 hours to submit your answer!\n"
+                "Use `!submit_challenge` followed by your SQL query to answer."
+            )
+            for channel_id in CHANNEL_IDS:
+                channel = bot.get_channel(channel_id)
+                if channel:
+                    await channel.send(challenge_message)
+    except Exception as e:
+        logging.error(f"Error in daily_challenge task: {e}")
+
+@tasks.loop(time=time(hour=21, minute=30))  # 9:30 PM IST
+async def challenge_time_over():
+    try:
+        challenge_over_message = (
+            "🕒 Daily SQL Challenge Time Over 🕒\n\n"
+            "The time for today's challenge has ended. "
+            "Don't worry if you missed it – a new challenge will be posted tomorrow!\n"
+            "Keep practicing and improving your SQL skills! 💪"
+        )
+        for channel_id in CHANNEL_IDS:
+            channel = bot.get_channel(channel_id)
+            if channel:
+                await channel.send(challenge_over_message)
+    except Exception as e:
+        logging.error(f"Error in challenge_time_over task: {e}")
 
 def setup_logging():
     logger = logging.getLogger('discord')
@@ -1045,49 +1057,6 @@ async def graceful_shutdown():
         await bot.db.close()
     await bot.close()
 
-@bot.event
-async def on_ready():
-    print(f'{bot.user} has connected to Discord!')
-    
-    try:
-        await wait_for_db()
-        await ensure_tables_exist()
-        
-        daily_question.start()
-        update_leaderboard.start()
-        post_weekly_heroes.start()
-        reset_daily_points.start()
-
-        for channel_id in CHANNEL_IDS:
-            channel = bot.get_channel(channel_id)
-            if channel:
-                await channel.send("SQL Mentor is online!")
-            else:
-                logging.warning(f"Could not find channel with ID {channel_id}")
-    except Exception as e:
-        logging.error(f"Error during startup: {e}", exc_info=True)
-        await bot.close()
-
-@bot.event
-async def on_error(event, *args, **kwargs):
-    logging.error(f"An error occurred in event {event}", exc_info=True)
-
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
-        await ctx.send("Invalid command. Use `!help` to see available commands.")
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("You're missing a required argument. Check `!help` for command usage.")
-    elif isinstance(error, AttributeError) and "'Bot' object has no attribute 'db'" in str(error):
-        await ctx.send("The bot is currently unable to connect to the database. Please try again later or contact the administrator.")
-    else:
-        logging.error(f"Unhandled error: {error}", exc_info=True)
-        await ctx.send("An unexpected error occurred. Please try again later or contact the administrator.")
-
-@bot.event
-async def on_disconnect():
-    print("Bot disconnected from Discord")
-
 async def get_user_stats(user_id):
     async with bot.db.acquire() as conn:
         stats = await conn.fetchrow('''
@@ -1120,6 +1089,55 @@ async def post_achievement_announcement(user_id, new_achievements):
         if channel:
             await channel.send(announcement)
 
+@bot.command()
+async def check_db(ctx):
+    try:
+        async with bot.db.acquire() as conn:
+            result = await conn.fetchval("SELECT 1")
+        if result == 1:
+            await ctx.send("Database connection is working!")
+        else:
+            await ctx.send("Database connection test failed.")
+    except Exception as e:
+        logging.error(f"Error checking database connection: {e}")
+        await ctx.send("An error occurred while checking the database connection.")
+
+@tasks.loop(hours=24)
+async def daily_task():
+    try:
+        # Task logic
+        logging.info("Daily task completed successfully")
+    except Exception as e:
+        logging.error(f"Error in daily task: {e}", exc_info=True)
+
+@daily_task.error
+async def daily_task_error(error):
+    logging.error(f"Unhandled error in daily task: {error}", exc_info=True)
+
+async def calculate_points(user_id, is_correct, difficulty):
+    base_points = {'easy': 60, 'medium': 80, 'hard': 120}.get(difficulty, 0)
+    streak = await get_user_streak(user_id)
+    bonus = min(streak * 5, 50)  # 5 points per day, up to 50
+    return base_points + bonus if is_correct else -20
+
+async def get_topic_question(ctx, topic):
+    user_id = ctx.author.id
+    username = str(ctx.author)
+    await ensure_user_exists(user_id, username)
+    try:
+        question = await get_question(topic=topic, user_id=user_id)
+        if question:
+            user_questions[user_id] = question
+            await display_question(ctx, question)
+        else:
+            await ctx.send(f"Sorry, no questions available for the topic '{topic}' at the moment.")
+    except Exception as e:
+        logging.error(f"Error in topic question command: {e}")
+        await ctx.send("An error occurred while fetching a question. Please try again later.")
+
+def get_ist_time():
+    return datetime.now(timezone(timedelta(hours=5, minutes=30)))
+
 if __name__ == "__main__":
     required_vars = ['DATABASE_URL', 'DISCORD_TOKEN', 'CHANNEL_ID']
     missing_vars = [var for var in required_vars if not os.getenv(var)]
@@ -1129,5 +1147,4 @@ if __name__ == "__main__":
         for var in required_vars:
             print(f"{var}: {os.getenv(var)}")
         raise ValueError("Missing required environment variables")
-    
     bot.run(os.getenv('DISCORD_TOKEN'))
