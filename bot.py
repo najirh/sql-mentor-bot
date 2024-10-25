@@ -20,10 +20,32 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
-# Global dictionaries to track user-specific data
-user_questions = {}
-user_attempts = {}
-user_skips = {}
+class ThreadSafeDict:
+    def __init__(self):
+        self._dict = {}
+        self._lock = asyncio.Lock()
+
+    async def get(self, key, default=None):
+        async with self._lock:
+            return self._dict.get(key, default)
+
+    async def set(self, key, value):
+        async with self._lock:
+            self._dict[key] = value
+
+    async def pop(self, key, default=None):
+        async with self._lock:
+            return self._dict.pop(key, default)
+
+    async def __contains__(self, key):
+        async with self._lock:
+            return key in self._dict
+
+# Replace your global dictionaries with these thread-safe versions
+user_questions = ThreadSafeDict()
+user_attempts = ThreadSafeDict()
+user_skips = ThreadSafeDict()
+user_last_active = ThreadSafeDict()
 
 CHANNEL_IDS = [int(id.strip()) for id in os.getenv('CHANNEL_ID', '').split(',') if id.strip()]
 
@@ -174,9 +196,10 @@ async def get_daily_submissions(user_id, date):
         return 0
 
 @bot.command(name='sql')
-@cooldown(1, 60, BucketType.user)
+@commands.cooldown(1, 60, commands.BucketType.user)
 async def sql(ctx):
     user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
     username = str(ctx.author)
     await ensure_user_exists(user_id, username)
 
@@ -189,7 +212,7 @@ async def sql(ctx):
         
         question = await get_question(difficulty=preference, user_id=user_id)
         if question:
-            user_questions[user_id] = question
+            await user_questions.set(user_id, question)
             await display_question(ctx, question)
         else:
             await ctx.send("Sorry, no questions available at your preferred difficulty. Try `!reset_preference` to see questions from all difficulties, or use `!topic <topic>` to try a specific topic.")
@@ -198,7 +221,7 @@ async def sql(ctx):
         await ctx.send("An error occurred while fetching a question. Please try again later.")
 
 @sql.error
-async def sql_question_command_error(ctx, error):
+async def sql_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
         await ctx.send(f"Whoa there, eager learner! You can try another question in {error.retry_after:.2f} seconds. Take a moment to review your last query or check out your stats with `!my_stats`.")
     else:
@@ -208,22 +231,36 @@ async def sql_question_command_error(ctx, error):
 @bot.command()
 async def submit(ctx, *, answer):
     user_id = ctx.author.id
-    if user_id not in user_questions:
-        await ctx.send("📚 There's no active question. Use `!sql` to get a new challenge! 🚀")
-        return
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
+    question = await user_questions.get(user_id)
+    if question:
+        current_attempts = await user_attempts.get(user_id, 0)
+        await user_attempts.set(user_id, current_attempts + 1)
+        await process_answer(ctx, user_id, answer)
+    else:
+        await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
 
-    question = user_questions[user_id]
+async def process_answer(ctx, user_id, answer):
+    question = await user_questions.get(user_id)
     logging.info(f"Retrieved question for user {user_id}: {question['id']}")
     if similar(answer.lower(), question['answer'].lower()) >= 0.8:
-        points = {'easy': 60, 'medium': 80, 'hard': 120}.get(question['difficulty'], 0)
-        await ctx.send(f"🎉 Brilliant! You've cracked the code! 🧠💡\n"
-                       f"You've earned {points} points! 🌟\n"
-                       f"Keep up the fantastic work, SQL wizard! 🧙‍♂️")
-        user_attempts[user_id] = 0  # Reset attempts
+        points = await calculate_points(user_id, True, question['difficulty'])
+        await ctx.send("🎉 Brilliant! You've cracked the code! 🧠💡")
+        await ctx.send(f"You've earned {points} points! 🌟")
+        await ctx.send("Keep up the fantastic work, SQL wizard! 🧙‍♂️")
+        
+        # Add this section to show available commands
+        await ctx.send("\nHere are some commands you might find useful:")
+        await ctx.send("`!my_stats` - View your overall statistics")
+        await ctx.send("`!daily_progress` - Check your progress for today")
+        await ctx.send("`!weekly_progress` - See your progress this week")
+        await ctx.send("`!leaderboard` - View the top performers")
+        await ctx.send("`!sql` - Get another question (if not on cooldown)")
     else:
         points = -10  # Reduce points for incorrect answers
-        user_attempts[user_id] = user_attempts.get(user_id, 0) + 1
-        if user_attempts[user_id] == 1:
+        current_attempts = await user_attempts.get(user_id, 0)
+        await user_attempts.set(user_id, current_attempts + 1)
+        if current_attempts == 0:
             await ctx.send(f"❌ Oops! Not quite there yet, but don't give up! 💪\n"
                            f"You've lost {abs(points)} points. 📉\n"
                            f"You have one more try! Use `!try_again` to attempt once more. 🔄\n"
@@ -245,7 +282,7 @@ async def submit(ctx, *, answer):
             await update_weekly_points(user_id, points)
             await update_daily_points(user_id, today, points)
 
-        del user_questions[user_id]  # Remove the question after submission
+        await user_questions.pop(user_id)  # Remove the question after submission
     except Exception as e:
         logging.error(f"Error in submit command: {e}", exc_info=True)
         await ctx.send("An unexpected error occurred while processing your submission. Please try again later or contact the administrator.")
@@ -303,6 +340,7 @@ async def on_ready():
         daily_challenge.start()
         update_leaderboard.start()
         challenge_time_over.start()
+        cleanup_inactive_users.start()
     except Exception as e:
         logging.error(f"Error during startup: {e}", exc_info=True)
         await bot.close()
@@ -360,12 +398,13 @@ async def hard(ctx):
 
 async def get_difficulty_question(ctx, difficulty):
     user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))  # Add this line
     username = str(ctx.author)
     await ensure_user_exists(user_id, username)
     try:
         question = await get_question(difficulty, user_id)
         if question:
-            user_questions[user_id] = question
+            await user_questions.set(user_id, question)
             await display_question(ctx, question)
         else:
             await ctx.send(f"Sorry, no {difficulty} questions available at the moment.")
@@ -376,6 +415,7 @@ async def get_difficulty_question(ctx, difficulty):
 @bot.command()
 async def question(ctx):
     user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
     username = str(ctx.author)
     await ensure_user_exists(user_id, username)
 
@@ -388,7 +428,7 @@ async def question(ctx):
         
         question = await get_question(difficulty=preference, user_id=user_id)
         if question:
-            user_questions[user_id] = question
+            await user_questions.set(user_id, question)
             await display_question(ctx, question)
         else:
             await ctx.send("Sorry, no questions available at the moment.")
@@ -399,7 +439,9 @@ async def question(ctx):
 @bot.command()
 async def try_again(ctx):
     user_id = ctx.author.id
-    if user_id in user_attempts and user_attempts[user_id] == 1:
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
+    current_attempts = await user_attempts.get(user_id, 0)
+    if current_attempts == 1:
         await ctx.send("You can try again. Please submit your new answer using the `!submit` command.")
     else:
         await ctx.send("You don't have any attempts left or there's no active question for you.")
@@ -428,6 +470,7 @@ async def top_10(ctx):
 
 @bot.command()
 async def weekly_heroes(ctx):
+    await user_last_active.set(ctx.author.id, datetime.now(timezone.utc))  # Add this line
     try:
         async with bot.db.acquire() as conn:
             week_start = await get_week_start()
@@ -486,6 +529,7 @@ async def report(ctx, question_id: int, *, feedback):
 @bot.command()
 async def skip(ctx):
     user_id = ctx.author.id
+    await user_skips.set(user_id, True)
 
     if user_id not in user_questions:
         await ctx.send("There's no active question. Use `!question` to get a question first.")
@@ -498,8 +542,8 @@ async def skip(ctx):
     try:
         new_question = await get_question(user_id=user_id)
         if new_question:
-            user_questions[user_id] = new_question
-            user_skips[user_id] = True
+            await user_questions.set(user_id, new_question)
+            await user_skips.set(user_id, True)
             await display_question(ctx, new_question)
             await ctx.send("Question skipped. Here's a new question for you.")
         else:
@@ -532,8 +576,9 @@ async def topic(ctx, *, topic_name):
 @bot.command()
 async def hint(ctx):
     user_id = ctx.author.id
-    if user_id in user_questions and user_questions[user_id]['hint']:
-        await ctx.send(f"💡 Hint: {user_questions[user_id]['hint']}\n"
+    question = await user_questions.get(user_id)
+    if question and question['hint']:
+        await ctx.send(f"💡 Hint: {question['hint']}\n"
                        f"Use this wisdom wisely, young SQL padawan! 🧘‍♂️✨")
     else:
         await ctx.send("🤔 Hmm... No hint available for this question.\n"
@@ -679,6 +724,7 @@ async def get_challenge_questions(num_questions=5):
 @bot.command()
 async def challenge(ctx, num_questions: int = 5):
     user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
     username = str(ctx.author)
     await ensure_user_exists(user_id, username)
 
@@ -792,9 +838,10 @@ class SQLBattle:
 @bot.command()
 @commands.cooldown(1, 5, commands.BucketType.user)
 async def sql_battle(ctx):
+    await user_last_active.set(ctx.author.id, datetime.now(timezone.utc))
     await ctx.send("SQL Battle is starting! React with 👍 to join. The battle will begin in 30 seconds.")
     message = await ctx.send("Waiting for players...")
-    await message.add_reaction("👍")
+    await message.add_reaction("��")
 
     await asyncio.sleep(30)
 
@@ -814,6 +861,8 @@ async def sql_battle(ctx):
 
 @bot.command()
 async def set_difficulty(ctx, difficulty: str):
+    user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
     valid_difficulties = ['easy', 'medium', 'hard']
     difficulty_emojis = {'easy': '🟢', 'medium': '🟡', 'hard': '🔴'}
     
@@ -821,7 +870,6 @@ async def set_difficulty(ctx, difficulty: str):
         await ctx.send(f"❌ Invalid difficulty. Please choose from: {', '.join(valid_difficulties)}")
         return
 
-    user_id = ctx.author.id
     async with bot.db.acquire() as conn:
         await conn.execute('''
             INSERT INTO user_preferences (user_id, preferred_difficulty)
@@ -916,6 +964,7 @@ async def check_achievements(user_id):
 @bot.command()
 async def my_achievements(ctx):
     user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))  # Add this line
     async with bot.db.acquire() as conn:
         achievements = await conn.fetch('''
             SELECT achievement FROM user_achievements
@@ -1121,6 +1170,8 @@ async def post_achievement_announcement(user_id, new_achievements):
 
 @bot.command()
 async def check_db(ctx):
+    user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
     try:
         async with bot.db.acquire() as conn:
             result = await conn.fetchval("SELECT 1")
@@ -1152,12 +1203,13 @@ async def calculate_points(user_id, is_correct, difficulty):
 
 async def get_topic_question(ctx, topic):
     user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
     username = str(ctx.author)
     await ensure_user_exists(user_id, username)
     try:
         question = await get_question(topic=topic, user_id=user_id)
         if question:
-            user_questions[user_id] = question
+            await user_questions.set(user_id, question)
             await display_question(ctx, question)
         else:
             await ctx.send(f"Sorry, no questions available for the topic '{topic}' at the moment.")
@@ -1171,6 +1223,7 @@ def get_ist_time():
 @bot.command()
 async def set_preference(ctx, *, preference=None):
     user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
     username = str(ctx.author)
     await ensure_user_exists(user_id, username)
 
@@ -1206,6 +1259,7 @@ async def set_preference(ctx, *, preference=None):
 @bot.command()
 async def submit_question(ctx, *, question):
     user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
     username = str(ctx.author)
     submitted_at = datetime.now(timezone.utc)
     
@@ -1224,6 +1278,7 @@ async def submit_question(ctx, *, question):
 @bot.command()
 async def daily_progress(ctx):
     user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))  # Add this line
     today = get_ist_time().date()
     daily_points = await get_daily_points(user_id, today)
     daily_submissions = await get_daily_submissions(user_id, today)
@@ -1236,11 +1291,34 @@ async def daily_progress(ctx):
 @bot.command()
 async def weekly_progress(ctx):
     user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))  # Add this line
     weekly_points = await get_weekly_points(user_id)
     
-    await ctx.send(f"📅 Your Weekly Progress 📅\n"
+    await ctx.send(f"🗓️ Your Weekly Progress 🗓️\n"
                    f"Points earned this week: {weekly_points}\n"
                    f"You're making great strides! 🚀")
+
+@tasks.loop(minutes=30)
+async def cleanup_inactive_users():
+    # This function only cleans up temporary in-memory data
+    # It does not affect any user data stored in the database
+    current_time = datetime.now(timezone.utc)
+    inactive_threshold = timedelta(hours=1)
+    
+    async def is_user_active(user_id):
+        last_active = await user_last_active.get(user_id)
+        if last_active is None:
+            return False
+        return (current_time - last_active) < inactive_threshold
+    
+    async for user_id in user_questions._dict.keys():
+        if not await is_user_active(user_id):
+            await user_questions.pop(user_id, None)
+            await user_attempts.pop(user_id, None)
+            await user_skips.pop(user_id, None)
+            await user_last_active.pop(user_id, None)
+    
+    logging.info(f"Cleaned up inactive users. Active users: {len(user_questions._dict)}")
 
 if __name__ == "__main__":
     required_vars = ['DATABASE_URL', 'DISCORD_TOKEN', 'CHANNEL_ID']
