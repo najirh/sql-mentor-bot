@@ -85,7 +85,8 @@ async def get_question(difficulty=None, user_id=None):
         return None
 
 async def get_week_start():
-    return datetime.now().date() - timedelta(days=datetime.now().weekday())
+    ist_now = get_ist_time()
+    return ist_now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=ist_now.weekday())
 
 async def update_weekly_points(user_id, points):
     try:
@@ -162,7 +163,7 @@ async def get_daily_submissions(user_id, date):
         async with bot.db.acquire() as conn:
             submissions = await conn.fetchval('''
                 SELECT COUNT(*) FROM user_submissions
-                WHERE user_id = $1 AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
+                WHERE user_id = $1 AND DATE(submitted_at AT TIME ZONE 'Asia/Kolkata') = $2
             ''', user_id, date)
         return submissions
     except Exception as e:
@@ -237,12 +238,13 @@ async def submit(ctx, *, answer):
                            f"You've lost {abs(points)} points. 📉\n"
                            f"Keep practicing and you'll improve!")
 
-    today = get_ist_time().date()
+    ist_time = get_ist_time()
+    today = ist_time.date()
     async with bot.db.acquire() as conn:
         await conn.execute('''
             INSERT INTO user_submissions (user_id, question_id, submitted_at, points)
             VALUES ($1, $2, $3, $4)
-        ''', user_id, question['id'], get_ist_time(), points)
+        ''', user_id, question['id'], ist_time, points)
         
         await update_weekly_points(user_id, points)
         await update_daily_points(user_id, today, points)
@@ -279,7 +281,7 @@ async def my_stats(ctx):
                        "Use `!sql` to get your first question and start your journey.\n\n"
                        "Remember, every SQL master started as a beginner. Your coding adventure begins now! 💪✨")
 
-@tasks.loop(time=time(hour=0))  # Midnight UTC
+@tasks.loop(time=time(hour=0, minute=0))  # Midnight IST
 async def reset_daily_points():
     try:
         async with bot.db.acquire() as conn:
@@ -308,7 +310,7 @@ async def on_ready():
 
 @bot.event
 async def on_error(event, *args, **kwargs):
-    logging.error(f"An error occurred in event {event}", exc_info=True)
+    logging.error(f"Unhandled error in {event}", exc_info=True)
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -723,7 +725,7 @@ async def challenge_history(ctx):
     if history:
         await ctx.send("Your recent challenge history:")
         for challenge in history:
-            await ctx.send(f"Date: {challenge['completed_at']}, Score: {challenge['correct_answers']}/{challenge['total_questions']}, Time: {challenge['time_taken']:.2f} minutes")
+            await ctx.send(f"Date: {challenge['completed_at'].replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=5, minutes=30)))}, Score: {challenge['correct_answers']}/{challenge['total_questions']}, Time: {challenge['time_taken']:.2f} minutes")
     else:
         await ctx.send("You haven't completed any challenges yet.")
 
@@ -779,6 +781,7 @@ class SQLBattle:
         await self.channel.send(f"🎉 {winner.mention} wins the SQL Battle! 🎉")
 
 @bot.command()
+@commands.cooldown(1, 5, commands.BucketType.user)
 async def sql_battle(ctx):
     await ctx.send("SQL Battle is starting! React with 👍 to join. The battle will begin in 30 seconds.")
     message = await ctx.send("Waiting for players...")
@@ -1137,7 +1140,11 @@ async def get_topic_question(ctx, topic):
         await ctx.send("An error occurred while fetching a question. Please try again later.")
 
 def get_ist_time():
-    return datetime.now(timezone(timedelta(hours=5, minutes=30)))
+    try:
+        return datetime.now(timezone(timedelta(hours=5, minutes=30)))
+    except Exception as e:
+        logging.error(f"Error getting IST time: {e}")
+        return datetime.now()  # Fallback to system time
 
 if __name__ == "__main__":
     required_vars = ['DATABASE_URL', 'DISCORD_TOKEN', 'CHANNEL_ID']
