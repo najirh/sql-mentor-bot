@@ -38,9 +38,19 @@ def create_discord_table(headers, data):
 
 async def create_db_pool():
     try:
-        db_url = os.getenv('DATABASE_URL')
-        logging.info(f"Attempting to connect to database with URL: {db_url[:10]}...{db_url[-10:]}")
-        bot.db = await asyncpg.create_pool(db_url, ssl='require')
+        db_host = os.getenv('DB_HOST')
+        db_port = os.getenv('DB_PORT')
+        db_name = os.getenv('DB_NAME')
+        db_user = os.getenv('DB_USER')
+        db_password = os.getenv('DB_PASSWORD')
+
+        if not all([db_host, db_port, db_name, db_user, db_password]):
+            raise ValueError("Database connection details are incomplete")
+
+        connection_string = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+        logging.info(f"Attempting to connect to database at {db_host}:{db_port}/{db_name}")
+        
+        bot.db = await asyncpg.create_pool(connection_string, ssl='require')
         logging.info("Database connection established")
     except Exception as e:
         logging.error(f"Failed to connect to the database: {e}")
@@ -249,13 +259,8 @@ async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     
     try:
-        logging.info("Attempting to create database pool...")
         await create_db_pool()
-        logging.info("Database pool created successfully")
-        
-        logging.info("Ensuring tables exist...")
         await ensure_tables_exist()
-        logging.info("Tables ensured")
         
         daily_question.start()
         update_leaderboard.start()
@@ -1046,13 +1051,8 @@ async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     
     try:
-        logging.info("Attempting to create database pool...")
         await create_db_pool()
-        logging.info("Database pool created successfully")
-        
-        logging.info("Ensuring tables exist...")
         await ensure_tables_exist()
-        logging.info("Tables ensured")
         
         daily_question.start()
         update_leaderboard.start()
@@ -1126,22 +1126,11 @@ for key, value in os.environ.items():
     print(f"{key}: {value}")
 
 if __name__ == "__main__":
-    database_url = os.getenv('DATABASE_URL')
-    if not database_url:
-        print("DATABASE_URL is not set in the environment variables")
-        print("Available environment variables:")
-        for key, value in os.environ.items():
-            print(f"{key}: {value}")
-        
-        # Try to find a similar variable
-        possible_db_urls = [value for key, value in os.environ.items() if 'DATABASE' in key.upper()]
-        if possible_db_urls:
-            print("Possible database URLs found:")
-            for url in possible_db_urls:
-                print(url)
-        
-        raise ValueError("DATABASE_URL must be set")
-    else:
-        print(f"DATABASE_URL is set: {database_url[:10]}...")
+    required_vars = ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DISCORD_TOKEN', 'CHANNEL_ID']
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    
+    if missing_vars:
+        logging.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+        raise ValueError("Missing required environment variables")
     
     bot.run(os.getenv('DISCORD_TOKEN'))
