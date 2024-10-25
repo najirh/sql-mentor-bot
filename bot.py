@@ -1121,12 +1121,9 @@ async def post_achievement_announcement(user_id, new_achievements):
         if channel:
             await channel.send(announcement)
 
-print("Environment variables:")
+print("All environment variables:")
 for key, value in os.environ.items():
-    if key == "DATABASE_URL":
-        print(f"{key}: {value[:10]}..." if value else f"{key}: Not set or empty")
-    else:
-        print(f"{key}: {'Set' if value else 'Not set or empty'}")
+    print(f"{key}: {value}")
 
 if __name__ == "__main__":
     database_url = os.getenv('DATABASE_URL')
@@ -1134,8 +1131,17 @@ if __name__ == "__main__":
         print("DATABASE_URL is not set in the environment variables")
         print("Available environment variables:")
         for key, value in os.environ.items():
-            print(f"{key}: {'Set' if value else 'Not set or empty'}")
+            print(f"{key}: {value}")
+        
+        # Try to find a similar variable
+        possible_db_urls = [value for key, value in os.environ.items() if 'DATABASE' in key.upper()]
+        if possible_db_urls:
+            print("Possible database URLs found:")
+            for url in possible_db_urls:
+                print(url)
+        
         raise ValueError("DATABASE_URL must be set")
     else:
         print(f"DATABASE_URL is set: {database_url[:10]}...")
+    
     bot.run(os.getenv('DISCORD_TOKEN'))
