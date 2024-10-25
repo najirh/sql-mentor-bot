@@ -163,7 +163,7 @@ async def get_daily_submissions(user_id, date):
         async with bot.db.acquire() as conn:
             submissions = await conn.fetchval('''
                 SELECT COUNT(*) FROM user_submissions
-                WHERE user_id = $1 AND DATE(submitted_at AT TIME ZONE 'Asia/Kolkata') = $2
+                WHERE user_id = $1 AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
             ''', user_id, date)
         return submissions
     except Exception as e:
@@ -240,16 +240,20 @@ async def submit(ctx, *, answer):
 
     ist_time = get_ist_time()
     today = ist_time.date()
-    async with bot.db.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO user_submissions (user_id, question_id, submitted_at, points)
-            VALUES ($1, $2, $3, $4)
-        ''', user_id, question['id'], ist_time, points)
-        
-        await update_weekly_points(user_id, points)
-        await update_daily_points(user_id, today, points)
+    try:
+        async with bot.db.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO user_submissions (user_id, question_id, submitted_at, points)
+                VALUES ($1, $2, $3, $4)
+            ''', user_id, question['id'], ist_time, points)
+            
+            await update_weekly_points(user_id, points)
+            await update_daily_points(user_id, today, points)
 
-    del user_questions[user_id]  # Remove the question after submission
+        del user_questions[user_id]  # Remove the question after submission
+    except Exception as e:
+        logging.error(f"Error in submit command: {e}", exc_info=True)
+        await ctx.send("An unexpected error occurred while processing your submission. Please try again later or contact the administrator.")
 
 @bot.command()
 async def my_stats(ctx):
@@ -276,7 +280,7 @@ async def my_stats(ctx):
                        f"🌟 Keep coding and climbing the ranks! 🚀\n"
                        f"Remember, every query makes you stronger! 💪")
     else:
-        await ctx.send("📚 Your SQL Adventure Awaits! 🚀\n\n"
+        await ctx.send(" Your SQL Adventure Awaits! 🚀\n\n"
                        "You haven't answered any questions yet. Let's change that!\n"
                        "Use `!sql` to get your first question and start your journey.\n\n"
                        "Remember, every SQL master started as a beginner. Your coding adventure begins now! 💪✨")
@@ -778,7 +782,7 @@ class SQLBattle:
             result += f"{player.name}: {score} points\n"
         await self.channel.send(result)
         winner = bot.get_user(sorted_scores[0][0])
-        await self.channel.send(f"🎉 {winner.mention} wins the SQL Battle! 🎉")
+        await self.channel.send(f"🎉 {winner.mention} wins the SQL Battle! 🏆")
 
 @bot.command()
 @commands.cooldown(1, 5, commands.BucketType.user)
@@ -1106,7 +1110,7 @@ async def check_db(ctx):
         logging.error(f"Error checking database connection: {e}")
         await ctx.send("An error occurred while checking the database connection.")
 
-@tasks.loop(hours=24)
+@tasks.loop(time=time(hour=0, minute=0))  # Midnight IST
 async def daily_task():
     try:
         # Task logic
@@ -1140,11 +1144,7 @@ async def get_topic_question(ctx, topic):
         await ctx.send("An error occurred while fetching a question. Please try again later.")
 
 def get_ist_time():
-    try:
-        return datetime.now(timezone(timedelta(hours=5, minutes=30)))
-    except Exception as e:
-        logging.error(f"Error getting IST time: {e}")
-        return datetime.now()  # Fallback to system time
+    return datetime.now(timezone(timedelta(hours=5, minutes=30)))
 
 if __name__ == "__main__":
     required_vars = ['DATABASE_URL', 'DISCORD_TOKEN', 'CHANNEL_ID']
