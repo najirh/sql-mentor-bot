@@ -841,7 +841,7 @@ async def sql_battle(ctx):
     await user_last_active.set(ctx.author.id, datetime.now(timezone.utc))
     await ctx.send("SQL Battle is starting! React with 👍 to join. The battle will begin in 30 seconds.")
     message = await ctx.send("Waiting for players...")
-    await message.add_reaction("��")
+    await message.add_reaction("👍")
 
     await asyncio.sleep(30)
 
@@ -1311,7 +1311,9 @@ async def cleanup_inactive_users():
             return False
         return (current_time - last_active) < inactive_threshold
     
-    async for user_id in user_questions._dict.keys():
+    # Use a list to store keys to avoid modifying the dictionary during iteration
+    user_ids = list(user_questions._dict.keys())
+    for user_id in user_ids:
         if not await is_user_active(user_id):
             await user_questions.pop(user_id, None)
             await user_attempts.pop(user_id, None)
