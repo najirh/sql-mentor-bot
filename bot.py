@@ -551,12 +551,11 @@ async def daily_question():
         current_question = await get_question()
         if current_question:
             points = {'easy': 60, 'medium': 80, 'hard': 120}.get(current_question['difficulty'], 0)
-            category = current_question['category'] if current_question['category'] else "Uncategorized"
             for channel_id in CHANNEL_IDS:
                 channel = bot.get_channel(channel_id)
                 if channel:
                     await channel.send(f"Question ID: {current_question['id']}")
-                    await channel.send(f"Daily SQL Question ({current_question['difficulty'].upper()}, {category} category, worth {points} points):\n\n{current_question['question']}\n\nDataset:\n```\n{current_question['datasets']}\n```\n\nUse `!submit` followed by your SQL query to answer!\n\nIf you want to go to a previous question, use the `!question <id>` command with the desired question ID.")
+                    await channel.send(f"Daily SQL Question ({current_question['difficulty'].upper()}, worth {points} points):\n\n{current_question['question']}\n\nDataset:\n```\n{current_question['datasets']}\n```\n\nUse `!submit` followed by your SQL query to answer!\n\nIf you want to go to a previous question, use the `!question <id>` command with the desired question ID.")
         else:
             for channel_id in CHANNEL_IDS:
                 channel = bot.get_channel(channel_id)
@@ -948,8 +947,7 @@ async def ensure_tables_exist():
                     datasets TEXT,
                     difficulty VARCHAR(25) NOT NULL,
                     hint TEXT,
-                    topic TEXT,
-                    category TEXT
+                    topic TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS reports (
