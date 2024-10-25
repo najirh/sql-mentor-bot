@@ -808,8 +808,10 @@ async def sql_battle(ctx):
 @bot.command()
 async def set_difficulty(ctx, difficulty: str):
     valid_difficulties = ['easy', 'medium', 'hard']
+    difficulty_emojis = {'easy': '🟢', 'medium': '🟡', 'hard': '🔴'}
+    
     if difficulty.lower() not in valid_difficulties:
-        await ctx.send(f"Invalid difficulty. Please choose from: {', '.join(valid_difficulties)}")
+        await ctx.send(f"❌ Invalid difficulty. Please choose from: {', '.join(valid_difficulties)}")
         return
 
     user_id = ctx.author.id
@@ -820,7 +822,10 @@ async def set_difficulty(ctx, difficulty: str):
             ON CONFLICT (user_id) DO UPDATE SET preferred_difficulty = $2
         ''', user_id, difficulty.lower())
     
-    await ctx.send(f"Your preferred difficulty has been set to {difficulty}.")
+    emoji = difficulty_emojis[difficulty.lower()]
+    await ctx.send(f"{emoji} Great choice! Your preferred difficulty has been set to **{difficulty}**.\n\n"
+                   f"📊 To check your current difficulty, use `!my_difficulty`\n"
+                   f"🔄 To reset your difficulty preference, use `!reset_preference`")
 
 @bot.command()
 async def my_difficulty(ctx):
@@ -831,10 +836,30 @@ async def my_difficulty(ctx):
             WHERE user_id = $1
         ''', user_id)
     
+    difficulty_emojis = {'easy': '🟢', 'medium': '🟡', 'hard': '🔴'}
+    
     if difficulty:
-        await ctx.send(f"Your current preferred difficulty is: {difficulty}")
+        emoji = difficulty_emojis.get(difficulty, '❓')
+        await ctx.send(f"{emoji} Your current preferred difficulty is: **{difficulty}**\n\n"
+                       f"Want to change? Use `!set_difficulty <easy/medium/hard>`")
     else:
-        await ctx.send("You haven't set a preferred difficulty yet. Use !set_difficulty to set one.")
+        await ctx.send("❓ You haven't set a preferred difficulty yet. Use `!set_difficulty <easy/medium/hard>` to set one.")
+
+@bot.command()
+async def reset_preference(ctx):
+    user_id = ctx.author.id
+    try:
+        async with bot.db.acquire() as conn:
+            await conn.execute('''
+                UPDATE user_preferences
+                SET preferred_difficulty = NULL
+                WHERE user_id = $1
+            ''', user_id)
+        await ctx.send("🔄 Your difficulty preference has been reset. You'll now receive questions from all difficulties.\n\n"
+                       "To set a new preference, use `!set_difficulty <easy/medium/hard>`")
+    except Exception as e:
+        logging.error(f"Error in reset_preference command: {e}")
+        await ctx.send("An error occurred while resetting your preference. Please try again later.")
 
 @bot.command()
 async def rate_question(ctx, question_id: int, rating: int):
@@ -1189,7 +1214,8 @@ async def reset_preference(ctx):
                 SET preferred_difficulty = NULL
                 WHERE user_id = $1
             ''', user_id)
-        await ctx.send("Your difficulty preference has been reset. You'll now receive questions from all difficulties.")
+        await ctx.send("🔄 Your difficulty preference has been reset. You'll now receive questions from all difficulties.\n\n"
+                       "To set a new preference, use `!set_difficulty <easy/medium/hard>`")
     except Exception as e:
         logging.error(f"Error in reset_preference command: {e}")
         await ctx.send("An error occurred while resetting your preference. Please try again later.")
