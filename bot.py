@@ -123,7 +123,7 @@ async def get_daily_points(user_id, date):
                 FROM daily_points
                 WHERE user_id = $1 AND date = $2
             ''', user_id, date)
-        return points
+        return points or 0  # Return 0 if points is None
     except Exception as e:
         logging.error(f"Error getting daily points: {e}")
         return 0
@@ -151,6 +151,7 @@ async def check_daily_limit(ctx, user_id):
     today = get_ist_time().date()
     daily_points = await get_daily_points(user_id, today)
     daily_submissions = await get_daily_submissions(user_id, today)
+    logging.info(f"User {user_id} daily points: {daily_points}, daily submissions: {daily_submissions}")
     if daily_points <= -50 or daily_submissions >= 10:
         await ctx.send("You've reached the daily limit. Please try again tomorrow! 🌙")
         return False
