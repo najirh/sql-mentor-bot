@@ -200,7 +200,10 @@ async def sql(ctx):
 @sql.error
 async def sql_question_command_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"This command is on cooldown. Try again in {error.retry_after:.2f} seconds.")
+        await ctx.send(f"Whoa there, eager learner! You can try another question in {error.retry_after:.2f} seconds. Take a moment to review your last query or check out your stats with `!my_stats`.")
+    else:
+        logging.error(f"Unhandled error in sql command: {error}")
+        await ctx.send("An unexpected error occurred. Please try again later.")
 
 @bot.command()
 async def submit(ctx, *, answer):
@@ -449,7 +452,7 @@ async def weekly_heroes(ctx):
                     streak = 0
                 data.append((i, user['username'], user['submissions'], user['points'], f"{streak} days"))
             table = create_discord_table(headers, data)
-            await ctx.send(f"🦸 Weekly Heroes 🦸\n{table}")
+            await ctx.send(f"🦸 Weekly Heroes \n{table}")
         else:
             await ctx.send("No submissions this week yet. Be the first hero!")
     except Exception as e:
@@ -1217,6 +1220,27 @@ async def submit_question(ctx, *, question):
     except Exception as e:
         logging.error(f"Error in submit_question command: {e}")
         await ctx.send("An error occurred while submitting your question. Please try again later.")
+
+@bot.command()
+async def daily_progress(ctx):
+    user_id = ctx.author.id
+    today = get_ist_time().date()
+    daily_points = await get_daily_points(user_id, today)
+    daily_submissions = await get_daily_submissions(user_id, today)
+    
+    await ctx.send(f"📊 Your Daily Progress 📊\n"
+                   f"Points earned today: {daily_points}\n"
+                   f"Questions attempted: {daily_submissions}\n"
+                   f"Keep up the great work! 💪")
+
+@bot.command()
+async def weekly_progress(ctx):
+    user_id = ctx.author.id
+    weekly_points = await get_weekly_points(user_id)
+    
+    await ctx.send(f"📅 Your Weekly Progress 📅\n"
+                   f"Points earned this week: {weekly_points}\n"
+                   f"You're making great strides! 🚀")
 
 if __name__ == "__main__":
     required_vars = ['DATABASE_URL', 'DISCORD_TOKEN', 'CHANNEL_ID']
