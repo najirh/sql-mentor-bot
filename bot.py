@@ -38,19 +38,22 @@ def create_discord_table(headers, data):
 
 async def create_db_pool():
     try:
-        db_host = os.getenv('DB_HOST')
-        db_port = os.getenv('DB_PORT')
-        db_name = os.getenv('DB_NAME')
-        db_user = os.getenv('DB_USER')
-        db_password = os.getenv('DB_PASSWORD')
+        database_url = os.getenv('DATABASE_URL')
+        if not database_url:
+            db_host = os.getenv('DB_HOST')
+            db_port = os.getenv('DB_PORT')
+            db_name = os.getenv('DB_NAME')
+            db_user = os.getenv('DB_USER')
+            db_password = os.getenv('DB_PASSWORD')
 
-        if not all([db_host, db_port, db_name, db_user, db_password]):
-            raise ValueError("Database connection details are incomplete")
+            if not all([db_host, db_port, db_name, db_user, db_password]):
+                raise ValueError("Database connection details are incomplete")
 
-        connection_string = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
-        logging.info(f"Attempting to connect to database at {db_host}:{db_port}/{db_name}")
+            database_url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+
+        logging.info(f"Attempting to connect to database")
         
-        bot.db = await asyncpg.create_pool(connection_string, ssl='require')
+        bot.db = await asyncpg.create_pool(database_url, ssl='require')
         logging.info("Database connection established")
     except Exception as e:
         logging.error(f"Failed to connect to the database: {e}")
@@ -1126,7 +1129,7 @@ for key, value in os.environ.items():
     print(f"{key}: {value}")
 
 if __name__ == "__main__":
-    required_vars = ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DISCORD_TOKEN', 'CHANNEL_ID']
+    required_vars = ['DATABASE_URL', 'DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DISCORD_TOKEN', 'CHANNEL_ID']
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     
     if missing_vars:
