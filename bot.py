@@ -38,10 +38,11 @@ def create_discord_table(headers, data):
 
 async def create_db_pool():
     try:
-        bot.db = await asyncpg.create_pool(os.getenv('DATABASE_URL'))
+        bot.db = await asyncpg.create_pool(os.getenv('DATABASE_URL'), ssl='require')
         logging.info("Database connection established")
     except Exception as e:
         logging.error(f"Failed to connect to the database: {e}")
+        raise  # Re-raise the exception to prevent the bot from continuing without a database
 
 async def ensure_user_exists(user_id, username):
     async with bot.db.acquire() as conn:
@@ -218,7 +219,7 @@ async def my_stats(ctx):
         await ctx.send(f"📊 Your SQL Journey Stats 📊\n\n"
                        f"🔢 Total Questions: {stats['total_questions']}\n"
                        f"✅ Correct Answers: {stats['correct_answers']}\n"
-                       f"🎯 Success Rate: {success_rate:.2f}%\n"
+                       f" Success Rate: {success_rate:.2f}%\n"
                        f"⭐ Average Points: {stats['avg_points']:.2f}\n"
                        f"💰 Total Points: {stats['total_points']}\n\n"
                        f"🌟 Keep coding and climbing the ranks! 🚀\n"
@@ -245,22 +246,24 @@ async def reset_daily_points():
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     
-    await create_db_pool()
-    await ensure_tables_exist()
-    
-    daily_question.start()
-    update_leaderboard.start()
-    post_weekly_heroes.start()
-    reset_daily_points.start()
+    try:
+        await create_db_pool()
+        await ensure_tables_exist()
+        
+        daily_question.start()
+        update_leaderboard.start()
+        post_weekly_heroes.start()
+        reset_daily_points.start()
 
-    for channel_id in CHANNEL_IDS:
-        channel = bot.get_channel(channel_id)
-        if channel:
-            await channel.send("SQL Mentor is online!")
-        else:
-            print(f"Could not find channel with ID {channel_id}")
-
-    await wait_for_db()
+        for channel_id in CHANNEL_IDS:
+            channel = bot.get_channel(channel_id)
+            if channel:
+                await channel.send("SQL Mentor is online!")
+            else:
+                print(f"Could not find channel with ID {channel_id}")
+    except Exception as e:
+        logging.error(f"Error during startup: {e}")
+        await bot.close()  # Shutdown the bot if we can't connect to the database
 
 @bot.event
 async def on_error(event, *args, **kwargs):
@@ -272,9 +275,11 @@ async def on_command_error(ctx, error):
         await ctx.send("Invalid command. Use `!help` to see available commands.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("You're missing a required argument. Check `!help` for command usage.")
+    elif isinstance(error, AttributeError) and "'Bot' object has no attribute 'db'" in str(error):
+        await ctx.send("The bot is currently unable to connect to the database. Please try again later or contact the administrator.")
     else:
         logging.error(f"Unhandled error: {error}", exc_info=True)
-        await ctx.send("An error occurred while processing your command. Please try again later.")
+        await ctx.send("An unexpected error occurred. Please try again later or contact the administrator.")
 
 @bot.event
 async def on_disconnect():
@@ -828,7 +833,7 @@ async def check_achievements(user_id):
                 ("🎓 Beginner", stats['total_answers'] >= 10),
                 ("🏅 Intermediate", stats['total_answers'] >= 100),
                 ("🏆 Expert", stats['total_answers'] >= 1000),
-                ("🎯 Sharpshooter", stats['correct_answers'] >= 50),
+                ("���� Sharpshooter", stats['correct_answers'] >= 50),
                 ("👑 SQL Master", stats['correct_answers'] >= 500)
             ]
             
@@ -1033,22 +1038,24 @@ async def graceful_shutdown():
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     
-    await create_db_pool()
-    await ensure_tables_exist()
-    
-    daily_question.start()
-    update_leaderboard.start()
-    post_weekly_heroes.start()
-    reset_daily_points.start()
+    try:
+        await create_db_pool()
+        await ensure_tables_exist()
+        
+        daily_question.start()
+        update_leaderboard.start()
+        post_weekly_heroes.start()
+        reset_daily_points.start()
 
-    for channel_id in CHANNEL_IDS:
-        channel = bot.get_channel(channel_id)
-        if channel:
-            await channel.send("SQL Mentor is online!")
-        else:
-            print(f"Could not find channel with ID {channel_id}")
-
-    await wait_for_db()
+        for channel_id in CHANNEL_IDS:
+            channel = bot.get_channel(channel_id)
+            if channel:
+                await channel.send("SQL Mentor is online!")
+            else:
+                print(f"Could not find channel with ID {channel_id}")
+    except Exception as e:
+        logging.error(f"Error during startup: {e}")
+        await bot.close()  # Shutdown the bot if we can't connect to the database
 
 @bot.event
 async def on_error(event, *args, **kwargs):
@@ -1060,9 +1067,11 @@ async def on_command_error(ctx, error):
         await ctx.send("Invalid command. Use `!help` to see available commands.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("You're missing a required argument. Check `!help` for command usage.")
+    elif isinstance(error, AttributeError) and "'Bot' object has no attribute 'db'" in str(error):
+        await ctx.send("The bot is currently unable to connect to the database. Please try again later or contact the administrator.")
     else:
         logging.error(f"Unhandled error: {error}", exc_info=True)
-        await ctx.send("An error occurred while processing your command. Please try again later.")
+        await ctx.send("An unexpected error occurred. Please try again later or contact the administrator.")
 
 @bot.event
 async def on_disconnect():
