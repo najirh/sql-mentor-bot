@@ -10,6 +10,8 @@ from aiohttp import web
 import aiohttp
 from difflib import SequenceMatcher
 import random
+from discord.ext.commands import cooldown, BucketType
+from logging.handlers import RotatingFileHandler
 
 # Setup
 logging.basicConfig(level=logging.INFO)
@@ -128,23 +130,18 @@ async def wait_for_db():
     max_retries = 10
     retry_interval = 5  # seconds
 
-    for _ in range(max_retries):
+    for attempt in range(max_retries):
         try:
-            conn = await asyncpg.connect(
-                host=os.getenv('DB_HOST'),
-                port=os.getenv('DB_PORT'),
-                user=os.getenv('DB_USER'),
-                password=os.getenv('DB_PASSWORD'),
-                database=os.getenv('DB_NAME')
-            )
-            await conn.close()
+            await create_db_pool()
             print("Successfully connected to the database")
             return
         except Exception as e:
-            print(f"Failed to connect to the database: {e}")
-            await asyncio.sleep(retry_interval)
-
-    raise Exception("Failed to connect to the database after multiple attempts")
+            print(f"Attempt {attempt + 1}/{max_retries}: Failed to connect to the database: {e}")
+            if attempt < max_retries - 1:
+                print(f"Retrying in {retry_interval} seconds...")
+                await asyncio.sleep(retry_interval)
+            else:
+                raise Exception("Failed to connect to the database after multiple attempts")
 
 async def ensure_tables_exist():
     async with bot.db.acquire() as conn:
@@ -224,6 +221,12 @@ async def keep_alive():
         
         await asyncio.sleep(300)  # Wait for 5 minutes before the next ping
 
+async def graceful_shutdown():
+    print("Shutting down gracefully...")
+    if hasattr(bot, 'db'):
+        await bot.db.close()
+    await bot.close()
+
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
@@ -247,14 +250,22 @@ async def on_ready():
     bot.loop.create_task(keep_alive())
 
 @bot.event
+async def on_error(event, *args, **kwargs):
+    logging.error(f"An error occurred in event {event}", exc_info=True)
+
+@bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         await ctx.send("Invalid command. Use `!help` to see available commands.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("You're missing a required argument. Check `!help` for command usage.")
     else:
-        logging.error(f"Unhandled error: {error}")
+        logging.error(f"Unhandled error: {error}", exc_info=True)
         await ctx.send("An error occurred while processing your command. Please try again later.")
+
+@bot.event
+async def on_disconnect():
+    print("Bot disconnected from Discord")
 
 @bot.command(name='help')
 async def help_command(ctx):
@@ -284,6 +295,7 @@ async def help_command(ctx):
     await ctx.send(help_message)
 
 @bot.command()
+@cooldown(1, 60, BucketType.user)
 async def interview(ctx):
     global current_question
     user_id = ctx.author.id
@@ -298,6 +310,11 @@ async def interview(ctx):
     except Exception as e:
         logging.error(f"Error in interview command: {e}")
         await ctx.send("An error occurred while fetching a question. Please try again later.")
+
+@interview.error
+async def interview_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(f"This command is on cooldown. Try again in {error.retry_after:.2f} seconds.")
 
 @bot.command()
 async def easy(ctx):
@@ -636,7 +653,33 @@ async def post_weekly_heroes():
         except Exception as e:
             logging.error(f"Error in post_weekly_heroes task: {e}")
 
+def setup_logging():
+    logger = logging.getLogger('discord')
+    logger.setLevel(logging.INFO)
+
+    handler = RotatingFileHandler(
+        filename='discord.log',
+        encoding='utf-8',
+        maxBytes=32 * 1024 * 1024,  # 32 MiB
+        backupCount=5,
+    )
+    dt_fmt = '%Y-%m-%d %H:%M:%S'
+    formatter = logging.Formatter('[{asctime}] [{levelname:<8}] {name}: {message}', dt_fmt, style='{')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+    return logger
+
+logger = setup_logging()
+
+# Then use logger.info(), logger.error(), etc. instead of print() throughout your code
+
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(start_healthcheck())
-    bot.run(os.getenv('DISCORD_TOKEN'))
+    try:
+        loop = asyncio.get_event_loop()
+        loop.create_task(start_healthcheck())
+        loop.run_until_complete(bot.start(os.getenv('DISCORD_TOKEN')))
+    except KeyboardInterrupt:
+        loop.run_until_complete(graceful_shutdown())
+    finally:
+        loop.close()
