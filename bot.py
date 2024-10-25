@@ -57,7 +57,7 @@ async def ensure_user_exists(user_id, username):
             await conn.execute('''
                 INSERT INTO users (user_id, username)
                 VALUES ($1, $2)
-                ON CONFLICT (user_id) DO NOTHING
+                ON CONFLICT (user_id) DO UPDATE SET username = $2
             ''', user_id, username)
     except Exception as e:
         logging.error(f"Error ensuring user exists: {e}")
@@ -148,6 +148,8 @@ async def display_question(ctx, question):
     time_limit = {'easy': 10, 'medium': 20, 'hard': 30}.get(question['difficulty'], 15)  # in minutes
     await ctx.send(f"Question ID: {question['id']}")
     await ctx.send(f"Here's a {question['difficulty'].upper()} question (worth {points} points):\n\n{question['question']}\n\nDataset:\n```\n{question['datasets']}\n```\n\n⏳ You have {time_limit} minutes to answer this question.\nTo submit your answer, use the `!submit` command followed by your SQL query.")
+    await ctx.send("You can use `!skip` to skip this question if you're stuck.")
+    await ctx.send(f"If you think there's an issue with this question, use `!report {question['id']} <your feedback>` to report it.")
 
 async def check_daily_limit(ctx, user_id):
     today = get_ist_time().date()
@@ -173,30 +175,29 @@ async def get_daily_submissions(user_id, date):
 
 @bot.command(name='sql')
 @cooldown(1, 60, BucketType.user)
-async def sql_question_command(ctx):
+async def sql(ctx):
     user_id = ctx.author.id
     username = str(ctx.author)
+    await ensure_user_exists(user_id, username)
+
     try:
-        await ensure_user_exists(user_id, username)
-        logging.info(f"User {user_id} ({username}) requested a SQL question")
-
-        if not await check_daily_limit(ctx, user_id):
-            logging.info(f"User {user_id} has reached their daily limit")
-            return
-
-        question = await get_question(user_id=user_id)
+        async with bot.db.acquire() as conn:
+            preference = await conn.fetchval('''
+                SELECT preferred_difficulty FROM user_preferences
+                WHERE user_id = $1
+            ''', user_id)
+        
+        question = await get_question(difficulty=preference, user_id=user_id)
         if question:
             user_questions[user_id] = question
-            logging.info(f"Stored question for user {user_id}: {question['id']}")
             await display_question(ctx, question)
         else:
-            logging.warning(f"No questions available for user {user_id}")
-            await ctx.send("Sorry, no questions available at the moment.")
+            await ctx.send("Sorry, no questions available at your preferred difficulty. Try `!reset_preference` to see questions from all difficulties, or use `!topic <topic>` to try a specific topic.")
     except Exception as e:
-        logging.error(f"Error in sql command for user {user_id}: {e}", exc_info=True)
+        logging.error(f"Error in sql command: {e}")
         await ctx.send("An error occurred while fetching a question. Please try again later.")
 
-@sql_question_command.error
+@sql.error
 async def sql_question_command_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
         await ctx.send(f"This command is on cooldown. Try again in {error.retry_after:.2f} seconds.")
@@ -214,7 +215,7 @@ async def submit(ctx, *, answer):
         points = {'easy': 60, 'medium': 80, 'hard': 120}.get(question['difficulty'], 0)
         await ctx.send(f"🎉 Brilliant! You've cracked the code! 🧠💡\n"
                        f"You've earned {points} points! 🌟\n"
-                       f"Keep up the fantastic work, SQL wizard! 🧙‍♂️✨")
+                       f"Keep up the fantastic work, SQL wizard! 🧙‍♂️")
         user_attempts[user_id] = 0  # Reset attempts
     else:
         points = -10  # Reduce points for incorrect answers
@@ -226,7 +227,7 @@ async def submit(ctx, *, answer):
                            f"To get a hint, type `!hint`. You've got this! ")
         else:
             await ctx.send(f"❌ Sorry, that's not correct. You've used all your attempts.\n"
-                           f"You've lost {abs(points)} points. 📉\n"
+                           f"You've lost {abs(points)} points. \n"
                            f"Keep practicing and you'll improve!")
 
     ist_time = get_ist_time()
@@ -322,28 +323,25 @@ async def on_disconnect():
     print("Bot disconnected from Discord")
 
 @bot.command(name='help')
-async def help_command(ctx):
-    help_message = """
+async def help(ctx):
+    help_text = """
     Available commands:
-    `!help` - Display this help message
-    `!sql` - Get a random SQL question
-    `!easy` - Get an easy SQL question
-    `!medium` - Get a medium SQL question
-    `!hard` - Get a hard SQL question
-    `!topic <topic_name>` - Get a question based on a specific topic
-    `!submit <answer>` - Submit your answer to the current question
-    `!top_10` - Show top 10 users based on ranking
-    `!weekly_heroes` - Show top 10 users based on weekly submissions and their current streak
-    `!my_stats` - View your personal statistics
-    `!sql_battle` - Start an SQL battle with other users
-    `!set_difficulty <difficulty>` - Set your preferred question difficulty
+    `!sql`: Get a random SQL question based on your preference
+    `!easy`, `!medium`, `!hard`: Get a question of specific difficulty
+    `!topic <topic_name>`: Get a question on a specific SQL topic
+    `!submit <answer>`: Submit your answer to the current question
+    `!skip`: Skip the current question (only available during a question)
+    `!report <question_id> <feedback>`: Report an issue with a question
+    `!top_10`: View the current leaderboard
+    `!weekly_heroes`: View this week's top performers
+    `!my_stats`: Check your personal progress and achievements
+    `!set_preference <difficulty>`: Set your preferred question difficulty
+    `!reset_preference`: Reset your difficulty preference
+    `!submit_question <your question>`: Submit a new question for review
 
-    To submit an answer, use the `!submit` command followed by your SQL query.
-    For example: `!submit SELECT * FROM users WHERE age > 18`
-
-    Good luck and happy coding!
+    For more detailed help on each command, use `!help <command_name>`.
     """
-    await ctx.send(help_message)
+    await ctx.send(help_text)
 
 @bot.command()
 async def easy(ctx):
@@ -407,11 +405,16 @@ async def try_again(ctx):
 async def top_10(ctx):
     try:
         async with bot.db.acquire() as conn:
-            top_users = await conn.fetch('SELECT user_id, points FROM leaderboard ORDER BY points DESC LIMIT 10')
+            top_users = await conn.fetch('''
+                SELECT u.username, l.points 
+                FROM leaderboard l
+                JOIN users u ON l.user_id = u.user_id
+                ORDER BY l.points DESC LIMIT 10
+            ''')
         
         if top_users:
-            headers = ["Rank", "User ID", "Points"]
-            data = [(i, user['user_id'], user['points']) for i, user in enumerate(top_users, 1)]
+            headers = ["Rank", "User", "Points"]
+            data = [(i, user['username'], user['points']) for i, user in enumerate(top_users, 1)]
             table = create_discord_table(headers, data)
             await ctx.send(f"🏆 Top 10 Leaderboard 🏆\n{table}")
         else:
@@ -426,20 +429,21 @@ async def weekly_heroes(ctx):
         async with bot.db.acquire() as conn:
             week_start = await get_week_start()
             top_users = await conn.fetch('''
-                SELECT user_id, COUNT(*) as submissions, SUM(points) as points
-                FROM user_submissions
-                WHERE submitted_at >= $1
-                GROUP BY user_id
+                SELECT u.username, COUNT(*) as submissions, SUM(us.points) as points
+                FROM user_submissions us
+                JOIN users u ON us.user_id = u.user_id
+                WHERE us.submitted_at >= $1
+                GROUP BY u.user_id, u.username
                 ORDER BY submissions DESC, points DESC
                 LIMIT 10
             ''', week_start)
         
         if top_users:
-            headers = ["Rank", "User ID", "Submissions", "Points", "Streak"]
+            headers = ["Rank", "User", "Submissions", "Points", "Streak"]
             data = []
             for i, user in enumerate(top_users, 1):
                 streak = await get_user_streak(user['user_id'])
-                data.append((i, user['user_id'], user['submissions'], user['points'], f"{streak} days"))
+                data.append((i, user['username'], user['submissions'], user['points'], f"{streak} days"))
             table = create_discord_table(headers, data)
             await ctx.send(f"🦸 Weekly Heroes 🦸\n{table}")
         else:
@@ -540,7 +544,7 @@ async def list_categories(ctx):
         
         if categories:
             category_list = ", ".join([f"📁 {cat['category']}" for cat in categories])
-            await ctx.send(f"🗂️ Available SQL Categories 🗂️\n\n{category_list}\n\n"
+            await ctx.send(f"🗂️ Available SQL Categories ️\n\n{category_list}\n\n"
                            f"Choose your path and conquer the SQL realm! 🏆")
         else:
             await ctx.send("🕵️‍♂️ Hmm... It seems our category list is on vacation.\n"
@@ -1033,7 +1037,17 @@ async def ensure_tables_exist():
                     points INT,
                     PRIMARY KEY (user_id, date)
                 );
+
+                -- Add the submitted_questions table here
+                CREATE TABLE IF NOT EXISTS submitted_questions (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    username TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    submitted_at TIMESTAMP WITH TIME ZONE NOT NULL
+                );
             ''')
+        logging.info("All tables created successfully")
     except Exception as e:
         logging.error(f"Error ensuring tables exist: {e}")
         raise
@@ -1176,6 +1190,24 @@ async def set_preference(ctx, *, preference=None):
     except Exception as e:
         logging.error(f"Error in set_preference command: {e}")
         await ctx.send("An error occurred while setting your preference. Please try again later.")
+
+@bot.command()
+async def submit_question(ctx, *, question):
+    user_id = ctx.author.id
+    username = str(ctx.author)
+    submitted_at = datetime.now(timezone.utc)
+    
+    try:
+        async with bot.db.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO submitted_questions (user_id, username, question, submitted_at)
+                VALUES ($1, $2, $3, $4)
+            ''', user_id, username, question, submitted_at)
+        
+        await ctx.send("Thank you for your contribution! Your question has been submitted for review. All contributor names will be added to GitHub monthly.")
+    except Exception as e:
+        logging.error(f"Error in submit_question command: {e}")
+        await ctx.send("An error occurred while submitting your question. Please try again later.")
 
 if __name__ == "__main__":
     required_vars = ['DATABASE_URL', 'DISCORD_TOKEN', 'CHANNEL_ID']
