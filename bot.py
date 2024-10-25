@@ -184,7 +184,7 @@ async def submit(ctx, *, answer):
             await ctx.send(f"❌ Oops! Not quite there yet, but don't give up! 💪\n"
                            f"You've lost {abs(points)} points. 📉\n"
                            f"You have one more try! Use `!try_again` to attempt once more. 🔄\n"
-                           f"To get a hint, type `!hint`. You've got this! 🚀")
+                           f"To get a hint, type `!hint`. You've got this! ")
         else:
             await ctx.send(f"❌ Sorry, that's not correct. You've used all your attempts.\n"
                            f"You've lost {abs(points)} points. 📉\n"
@@ -1121,8 +1121,21 @@ async def post_achievement_announcement(user_id, new_achievements):
         if channel:
             await channel.send(announcement)
 
+print("Environment variables:")
+for key, value in os.environ.items():
+    if key == "DATABASE_URL":
+        print(f"{key}: {value[:10]}..." if value else f"{key}: Not set or empty")
+    else:
+        print(f"{key}: {'Set' if value else 'Not set or empty'}")
+
 if __name__ == "__main__":
-    if not os.getenv('DATABASE_URL'):
-        logging.error("DATABASE_URL is not set in the environment variables")
+    database_url = os.getenv('DATABASE_URL')
+    if not database_url:
+        print("DATABASE_URL is not set in the environment variables")
+        print("Available environment variables:")
+        for key, value in os.environ.items():
+            print(f"{key}: {'Set' if value else 'Not set or empty'}")
         raise ValueError("DATABASE_URL must be set")
+    else:
+        print(f"DATABASE_URL is set: {database_url[:10]}...")
     bot.run(os.getenv('DISCORD_TOKEN'))
