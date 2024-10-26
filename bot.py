@@ -345,7 +345,6 @@ async def process_answer(ctx, user_id, answer):
                        f"• `!daily_progress` - See your progress for today\n"
                        f"• `!weekly_progress` - Check your weekly progress\n"
                        f"• `!my_achievements` - View your achievements\n"
-                       f"• `!leaderboard` - See the top performers")
         await user_questions.pop(user_id, None)
         await user_attempts.pop(user_id, None)
     else:
