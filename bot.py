@@ -675,7 +675,7 @@ async def submit_challenge(ctx, *, answer):
     is_correct, _ = check_answer(answer, current_challenge['answer'])
     points = {'easy': 120, 'medium': 160, 'hard': 240}.get(current_challenge['difficulty'], 150)
     if not is_correct:
-        points = -20  # Deduct points for incorrect answers
+        points = -10  # Deduct points for incorrect answers
 
     await update_user_stats(user_id, current_challenge['id'], is_correct, points)
 
