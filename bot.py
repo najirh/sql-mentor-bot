@@ -473,42 +473,6 @@ async def try_again(ctx):
         await ctx.send("You've used all your attempts for this question. Use `!sql` to get a new question.")
 
 @bot.command()
-async def leaderboard(ctx):
-    try:
-        async with DB_SEMAPHORE:
-            async with bot.db.acquire() as conn:
-                top_users = await conn.fetch('''
-                    SELECT u.username, l.points 
-                    FROM leaderboard l
-                    JOIN users u ON l.user_id = u.user_id
-                    ORDER BY l.points DESC LIMIT 10
-                ''')
-        
-        if top_users:
-            headers = ["Rank", "User", "Points"]
-            data = [(i, user['username'], user['points']) for i, user in enumerate(top_users, 1)]
-            table = create_discord_table(headers, data)
-            await ctx.send(f"🏆 Top 10 Leaderboard 🏆\n{table}")
-        else:
-            await ctx.send("No users on the leaderboard yet. Start answering questions to climb the ranks!")
-    except Exception as e:
-        logging.error(f"Error in leaderboard command: {e}")
-        await ctx.send("An error occurred while fetching the leaderboard. Please try again later.")
-        
-        if top_users:
-            headers = ["Rank", "User", "Submissions", "Points"]
-            data = []
-            for i, user in enumerate(top_users, 1):
-                data.append((i, user['username'], user['submissions'], user['points']))
-            table = create_discord_table(headers, data)
-            await ctx.send(f"🦸 Weekly Heroes \n{table}")
-        else:
-            await ctx.send("No submissions this week yet. Be the first hero!")
-    except Exception as e:
-        logging.error(f"Error in weekly_heroes command: {e}")
-        await ctx.send("An error occurred while fetching the weekly heroes. Please try again later.")
-
-@bot.command()
 async def report(ctx, question_id: int, *, feedback):
     user_id = ctx.author.id
     username = str(ctx.author)
