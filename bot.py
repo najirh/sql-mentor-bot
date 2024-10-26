@@ -776,62 +776,6 @@ async def medium(ctx):
 async def hard(ctx):
     await get_difficulty_question(ctx, 'hard')
 
-async def get_difficulty_question(ctx, difficulty):
-    user_id = ctx.author.id
-    await user_last_active.set(user_id, datetime.now(timezone.utc))  # Add this line
-    username = str(ctx.author)
-    await ensure_user_exists(user_id, username)
-    try:
-        question = await get_question(difficulty, user_id)
-        if question:
-            await user_questions.set(user_id, question)
-            await display_question(ctx, question)
-        else:
-            await ctx.send(f"Sorry, no {difficulty} questions available at the moment.")
-    except Exception as e:
-        logging.error(f"Error in {difficulty} command: {e}")
-        await ctx.send("An error occurred while fetching a question. Please try again later.")
-
-@bot.command()
-async def question(ctx):
-    user_id = ctx.author.id
-    await user_last_active.set(user_id, datetime.now(timezone.utc))
-    username = str(ctx.author)
-    await ensure_user_exists(user_id, username)
-
-    try:
-        async with DB_SEMAPHORE:
-            async with bot.db.acquire() as conn:
-                preference = await conn.fetchval('''
-                    SELECT preferred_difficulty FROM user_preferences
-                    WHERE user_id = $1
-                ''', user_id)
-        
-        question = await get_question(difficulty=preference, user_id=user_id)
-        if question:
-            await user_questions.set(user_id, question)
-            await display_question(ctx, question)
-        else:
-            await ctx.send("Sorry, no questions available at the moment.")
-    except Exception as e:
-        logging.error(f"Error in question command: {e}")
-        await ctx.send("An error occurred while fetching a question. Please try again later.")
-
-@bot.command()
-async def try_again(ctx):
-    user_id = ctx.author.id
-    await user_last_active.set(user_id, datetime.now(timezone.utc))
-    current_attempts = await user_attempts.get(user_id, 0)
-    max_attempts = 3
-    if current_attempts < max_attempts:
-        question = await user_questions.get(user_id)
-        if question:
-            await display_question(ctx, question)
-        else:
-            await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
-    else:
-        await ctx.send("You've used all your attempts for this question. Use `!sql` to get a new question.")
-
 @bot.command()
 async def leaderboard(ctx):
     try:
@@ -957,60 +901,6 @@ async def list_topics(ctx):
     except Exception as e:
         logging.error(f"Error in list_topics: {e}")
         await ctx.send("An error occurred while fetching the topic list. Please try again later.")
-
-@bot.command()
-async def hint(ctx):
-    user_id = ctx.author.id
-    question = await user_questions.get(user_id)
-    if question and question['hint']:
-        await ctx.send(f"💡 Hint: {question['hint']}\n"
-                       f"Use this wisdom wisely, young SQL padawan! 🧘‍♂️✨")
-    else:
-        await ctx.send("🤔 Hmm... No hint available for this question.\n"
-                       "Time to put on your thinking cap! 🧢💭")
-
-@bot.command()
-async def list_categories(ctx):
-    try:
-        async with DB_SEMAPHORE:
-            async with bot.db.acquire() as conn:
-                categories = await conn.fetch('''
-                    SELECT DISTINCT category FROM questions
-                    WHERE category IS NOT NULL
-                    ORDER BY category
-                ''')
-        
-        if categories:
-            category_list = ", ".join([f"📁 {cat['category']}" for cat in categories])
-            await ctx.send(f"🗂️ Available SQL Categories ️\n\n{category_list}\n\n"
-                           f"Choose your path and conquer the SQL realm! 🏆")
-        else:
-            await ctx.send("🕵️‍♂️ Hmm... It seems our category list is on vacation.\n"
-                           "Check back later for exciting SQL adventures! 🌴")
-    except Exception as e:
-        logging.error(f"Error in list_categories command: {e}")
-        await ctx.send("⚠️ Oops! Our category finder is taking a coffee break.\n"
-                       "Please try again later when it's caffeinated! ☕")
-
-@tasks.loop(time=time(hour=23, minute=30))  # 11:30 PM IST
-async def daily_question():
-    global current_question
-    try:
-        current_question = await get_question()
-        if current_question:
-            points = {'easy': 60, 'medium': 80, 'hard': 120}.get(current_question['difficulty'], 0)
-            for channel_id in CHANNEL_IDS:
-                channel = bot.get_channel(channel_id)
-                if channel:
-                    await channel.send(f"Question ID: {current_question['id']}")
-                    await channel.send(f"Daily SQL Question ({current_question['difficulty'].upper()}, worth {points} points):\n\n{current_question['question']}\n\nDataset:\n```\n{current_question['datasets']}\n```\n\nUse `!submit` followed by your SQL query to answer!\n\nIf you want to go to a previous question, use the `!question <id>` command with the desired question ID.")
-        else:
-            for channel_id in CHANNEL_IDS:
-                channel = bot.get_channel(channel_id)
-                if channel:
-                    await channel.send("Sorry, no questions available for today's daily question.")
-    except Exception as e:
-        logging.error(f"Error in daily_question task: {e}")
 
 @tasks.loop(time=time(hour=3, minute=30))  # 3:30 AM IST (10 PM UTC)
 async def update_leaderboard():
@@ -1620,6 +1510,27 @@ async def weekly_progress(ctx):
     await ctx.send(f"🗓️ Your Weekly Progress 🗓️\n"
                    f"Points earned this week: {weekly_points}\n"
                    f"You're making great strides! 🚀")
+
+                   
+@bot.command()
+async def help(ctx):
+    help_text = """
+    Available commands:
+    `!sql`: Get a random SQL question
+    `!easy`, `!medium`, `!hard`: Get a question of specific difficulty
+    `!topic`: List all available topics or get a question on a specific SQL topic
+    `!company`: List all available companies or practice questions from a specific company
+    `!submit <answer>`: Submit your answer to the current question
+    `!set_difficulty <difficulty>`: Set your preferred question difficulty
+    `!sql_battle`: Start an SQL battle with other users
+    `!my_stats`: View your overall statistics
+    `!leaderboard`: View the top 10 users
+    `!weekly_heroes`: View this week's top performers
+    `!submit_question`: Submit a new question for review
+
+    For more detailed help on each command, use `!help <command_name>`.
+    """
+    await ctx.send(help_text)
 
 @bot.command()
 @db_connection_required()
