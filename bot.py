@@ -494,23 +494,6 @@ async def leaderboard(ctx):
     except Exception as e:
         logging.error(f"Error in leaderboard command: {e}")
         await ctx.send("An error occurred while fetching the leaderboard. Please try again later.")
-
-@bot.command()
-async def weekly_heroes(ctx):
-    await user_last_active.set(ctx.author.id, datetime.now(timezone.utc))  # Add this line
-    try:
-        async with DB_SEMAPHORE:
-            async with bot.db.acquire() as conn:
-                week_start = await get_week_start()
-                top_users = await conn.fetch('''
-                    SELECT u.user_id, u.username, COUNT(*) as submissions, SUM(us.points) as points
-                    FROM user_submissions us
-                    JOIN users u ON us.user_id = u.user_id
-                    WHERE us.submitted_at >= $1
-                    GROUP BY u.user_id, u.username
-                    ORDER BY submissions DESC, points DESC
-                    LIMIT 10
-                ''', week_start)
         
         if top_users:
             headers = ["Rank", "User", "Submissions", "Points"]
