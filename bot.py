@@ -1074,6 +1074,22 @@ async def ensure_tables_exist():
                         username VARCHAR(255) NOT NULL
                     );
 
+                    CREATE TABLE IF NOT EXISTS scheduled_posts (
+                        id SERIAL PRIMARY KEY,
+                        timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
+                        message TEXT NOT NULL,
+                        posted BOOLEAN DEFAULT FALSE
+                    );
+                                   
+                    CREATE TABLE IF NOT EXISTS questions (
+                        id SERIAL PRIMARY KEY,
+                        question TEXT NOT NULL,
+                        answer TEXT NOT NULL,
+                        difficulty VARCHAR(10) NOT NULL,
+                        topic VARCHAR(255),
+                        company VARCHAR(255)
+                    );
+
                     CREATE TABLE IF NOT EXISTS user_submissions (
                         id SERIAL PRIMARY KEY,
                         user_id BIGINT,
@@ -1119,7 +1135,20 @@ async def ensure_tables_exist():
                         username VARCHAR(255),
                         question TEXT,
                         submitted_at TIMESTAMP
-                    )
+                    );
+                                   
+                    CREATE TABLE IF NOT EXISTS reports (
+                        id SERIAL PRIMARY KEY,
+                        reported_by BIGINT,
+                        question_id INT,
+                        remarks TEXT,
+                        reported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE TABLE IF NOT EXISTS challenge_history (
+                        question_id INTEGER PRIMARY KEY,
+                        challenge_date DATE NOT NULL
+                    );
                 ''')
         logging.info("All tables created successfully")
     except Exception as e:
