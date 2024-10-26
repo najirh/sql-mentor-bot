@@ -13,6 +13,7 @@ from discord.ext.commands import cooldown, BucketType
 from logging.handlers import RotatingFileHandler
 import pytz
 import functools
+import sqlparse
 
 # Setup
 logging.basicConfig(level=logging.INFO)
@@ -294,60 +295,28 @@ async def process_answer(ctx, user_id, answer):
         return
 
     is_correct, feedback = check_answer(answer, question['answer'])
-    points = await calculate_points(user_id, is_correct, question['difficulty'])
-
     current_attempts = await user_attempts.get(user_id, 0)
+    max_attempts = 3  # Set this to your desired max attempts
 
-    if not is_correct:
-        if current_attempts < 1:  # Allow two attempts (0 and 1)
-            # Check daily limit only for incorrect answers
-            if not await check_daily_limit(ctx, user_id):
-                return
-            await update_daily_points(user_id, get_ist_time().date(), points)
-            await update_weekly_points(user_id, points)
-            await ctx.send(f"Sorry, that's not correct. {feedback}\n"
-                           f"You lost {abs(points)} points.\n"
-                           f"You can use `!try_again` to attempt the question once more.")
-        else:
-            await ctx.send(f"Sorry, that's not correct. {feedback}\n"
-                           f"You've used all your attempts for this question. Use `!sql` to get a new question.")
-            await user_questions.pop(user_id, None)
-            await user_attempts.pop(user_id, None)
-    else:
-        await update_daily_points(user_id, get_ist_time().date(), points)
-        await update_weekly_points(user_id, points)
-        await ctx.send(f"Correct! Well done. You earned {points} points.")
-        
-        # Update achievements
-        await update_user_achievements(ctx, user_id)
-        
-        # Suggest next actions
-        await ctx.send("Great job! Here are some options for your next challenge:")
-        await ctx.send("1. `!sql` for a random question")
-        if question.get('topic'):
-            await ctx.send(f"2. `!topic {question['topic']}` for another question on the same topic")
-        if question.get('company'):
-            await ctx.send(f"3. `!company {question['company']}` for another question from the same company")
+    points = 0  # Initialize points to 0
 
+    if is_correct:
+        points = await calculate_points(user_id, is_correct, question['difficulty'])
+        await update_user_stats(user_id, points, is_correct)
+        await ctx.send(f"Correct! You've earned {points} points.")
         await user_questions.pop(user_id, None)
         await user_attempts.pop(user_id, None)
+    else:
+        if current_attempts < max_attempts - 1:
+            await user_attempts.set(user_id, current_attempts + 1)
+            await ctx.send(f"Sorry, that's not correct. {feedback}\nYou have {max_attempts - current_attempts - 1} attempts left. Use `!submit` to try again.")
+        else:
+            await ctx.send(f"Sorry, that's not correct. You've used all your attempts for this question. Use `!sql` to get a new question.")
+            await user_questions.pop(user_id, None)
+            await user_attempts.pop(user_id, None)
 
-    # Update user_attempts
-    await user_attempts.set(user_id, current_attempts + 1)
-
-    # Update user submissions
-    try:
-        async with DB_SEMAPHORE:
-            async with bot.db.acquire() as conn:
-                await conn.execute('''
-                    INSERT INTO user_submissions (user_id, question_id, is_correct, points, submitted_at)
-                    VALUES ($1, $2, $3, $4, $5)
-                ''', user_id, question['id'], is_correct, points, datetime.now(timezone.utc))
-    except Exception as e:
-        logging.error(f"Error updating user submissions: {e}")
-
-    # Update user streak
-    await update_user_streak(user_id, is_correct)
+    # Always update user submissions, with 0 points for incorrect answers
+    await update_user_submissions(user_id, question['id'], is_correct, points)
 
 @bot.command()
 @db_connection_required()
@@ -1064,18 +1033,25 @@ async def ensure_tables_exist():
         async with DB_SEMAPHORE:
             async with bot.db.acquire() as conn:
                 await conn.execute('''
-                    -- Create your tables here
-                    CREATE TABLE IF NOT EXISTS users (
-                        user_id BIGINT PRIMARY KEY,
-                        username TEXT NOT NULL
+                    -- Other table creations...
+
+                    CREATE TABLE IF NOT EXISTS user_submissions (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT,
+                        question_id INT,
+                        is_correct BOOLEAN,
+                        points INT,
+                        submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
-                    
-                    -- Add other table creations as needed
-                    
-                    CREATE TABLE IF NOT EXISTS user_stats (
-                        user_id BIGINT PRIMARY KEY,
-                        streak INT DEFAULT 0
-                    );
+
+                    -- Add is_correct column if it doesn't exist
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                                       WHERE table_name='user_submissions' AND column_name='is_correct') THEN
+                            ALTER TABLE user_submissions ADD COLUMN is_correct BOOLEAN;
+                        END IF;
+                    END $$;
                 ''')
         logging.info("All tables created successfully")
     except Exception as e:
@@ -1371,11 +1347,39 @@ async def list_companies(ctx):
         await ctx.send("An error occurred while fetching the company list. Please try again later.")
 
 def check_answer(user_answer, correct_answer):
-    # Implement your answer checking logic here
-    # This is a simple example, you might want to make it more sophisticated
-    is_correct = user_answer.strip().lower() == correct_answer.strip().lower()
-    feedback = "Your answer is correct!" if is_correct else "Your answer is incorrect. Please try again."
-    return is_correct, feedback
+    # Normalize and parse the SQL queries
+    user_sql = sqlparse.format(user_answer.strip().lower(), reindent=True, keyword_case='upper')
+    correct_sql = sqlparse.format(correct_answer.strip().lower(), reindent=True, keyword_case='upper')
+
+    # Compare the parsed SQL structures
+    user_parsed = sqlparse.parse(user_sql)[0]
+    correct_parsed = sqlparse.parse(correct_sql)[0]
+
+    # Check for exact match first
+    if user_sql == correct_sql:
+        return True, "Your answer is correct!"
+
+    # Compare the structures
+    structure_similarity = compare_sql_structures(user_parsed, correct_parsed)
+
+    # Use SequenceMatcher for string similarity
+    string_similarity = SequenceMatcher(None, user_sql, correct_sql).ratio()
+
+    # Calculate overall similarity
+    overall_similarity = (structure_similarity + string_similarity) / 2
+
+    if overall_similarity >= 0.65:
+        return True, "Your answer is correct!"
+    else:
+        return False, f"Your answer is incorrect. Similarity: {overall_similarity:.2f}. Please try again."
+
+def compare_sql_structures(user_parsed, correct_parsed):
+    # This is a simplified comparison. You might want to expand this for more complex queries.
+    user_tokens = [token.normalized for token in user_parsed.flatten() if not token.is_whitespace]
+    correct_tokens = [token.normalized for token in correct_parsed.flatten() if not token.is_whitespace]
+
+    common_tokens = set(user_tokens) & set(correct_tokens)
+    return len(common_tokens) / max(len(user_tokens), len(correct_tokens))
 
 async def get_user_streak(user_id):
     try:
@@ -1443,6 +1447,39 @@ async def db_operation(operation, *args):
         except Exception as e:
             logging.error(f"Database operation error: {e}")
             raise
+
+async def update_user_stats(user_id, points, is_correct):
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                await conn.execute('''
+                    INSERT INTO user_stats (user_id, total_points, correct_answers, total_answers)
+                    VALUES ($1, $2, $3, 1)
+                    ON CONFLICT (user_id)
+                    DO UPDATE SET
+                        total_points = user_stats.total_points + $2,
+                        correct_answers = user_stats.correct_answers + $3,
+                        total_answers = user_stats.total_answers + 1
+                ''', user_id, points, int(is_correct))
+        
+        # Update weekly points
+        await update_weekly_points(user_id, points)
+        
+    except Exception as e:
+        logging.error(f"Error updating user stats: {e}")
+        raise
+
+async def update_user_submissions(user_id, question_id, is_correct, points):
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                await conn.execute('''
+                    INSERT INTO user_submissions (user_id, question_id, is_correct, points)
+                    VALUES ($1, $2, $3, $4)
+                ''', user_id, question_id, is_correct, points)
+    except Exception as e:
+        logging.error(f"Error updating user submissions: {e}")
+        raise
 
 def main():
     loop = asyncio.get_event_loop()
