@@ -51,7 +51,7 @@ user_last_active = ThreadSafeDict()
 
 CHANNEL_IDS = [int(id.strip()) for id in os.getenv('CHANNEL_ID', '').split(',') if id.strip()]
 
-DB_SEMAPHORE = asyncio.Semaphore(5)  # Adjust the number based on your needs
+DB_SEMAPHORE = asyncio.Semaphore(10)  # Increase from 5 to 10 or higher if needed
 
 def similar(a, b):
     return SequenceMatcher(None, a, b).ratio()
@@ -84,11 +84,12 @@ def retry_on_failure(max_retries=3, delay=1):
             for attempt in range(max_retries):
                 try:
                     return await func(*args, **kwargs)
-                except asyncpg.InterfaceError as e:
+                except (asyncpg.InterfaceError, asyncio.TimeoutError) as e:
                     if attempt == max_retries - 1:
                         raise
                     logging.warning(f"Database operation failed, retrying in {delay} seconds...")
                     await asyncio.sleep(delay)
+            return await func(*args, **kwargs)
         return wrapper
     return decorator
 
@@ -1144,9 +1145,7 @@ async def check_db(ctx):
     user_id = ctx.author.id
     await user_last_active.set(user_id, datetime.now(timezone.utc))
     try:
-        async with DB_SEMAPHORE:
-            async with bot.db.acquire() as conn:
-                result = await conn.fetchval("SELECT 1")
+        result = await db_operation(lambda conn: conn.fetchval("SELECT 1"))
         if result == 1:
             await ctx.send("Database connection is working!")
         else:
@@ -1433,15 +1432,30 @@ async def setup():
 
     await wait_for_db()
 
+async def db_operation(operation, *args):
+    async with DB_SEMAPHORE:
+        try:
+            async with bot.db.acquire() as conn:
+                return await operation(conn, *args)
+        except asyncpg.InterfaceError as e:
+            logging.error(f"Database interface error: {e}")
+            raise
+        except Exception as e:
+            logging.error(f"Database operation error: {e}")
+            raise
+
 def main():
-    asyncio.run(setup())
+    loop = asyncio.get_event_loop()
     try:
-        bot.run(os.getenv('DISCORD_TOKEN'))
+        loop.run_until_complete(setup())
+        loop.run_until_complete(bot.start(os.getenv('DISCORD_TOKEN')))
     except KeyboardInterrupt:
         print("Bot stopped by user.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
     finally:
-        if hasattr(bot, 'db'):
-            asyncio.run(bot.db.close())
+        loop.run_until_complete(graceful_shutdown())
+        loop.close()
 
 if __name__ == "__main__":
     main()
