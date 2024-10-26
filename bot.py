@@ -86,9 +86,9 @@ async def ensure_user_exists(user_id, username):
         logging.error(f"Error ensuring user exists: {e}")
         raise
 
-async def get_question(difficulty=None, user_id=None, topic=None):
+async def get_question(difficulty=None, user_id=None, topic=None, company=None):
     try:
-        logging.info(f"Fetching question for user_id: {user_id}, difficulty: {difficulty}, topic: {topic}")
+        logging.info(f"Fetching question for user_id: {user_id}, difficulty: {difficulty}, topic: {topic}, company: {company}")
         async with bot.db.acquire() as conn:
             query = '''
                 SELECT q.* FROM questions q
@@ -98,10 +98,11 @@ async def get_question(difficulty=None, user_id=None, topic=None):
                 AND r.question_id IS NULL
                 AND ($2::VARCHAR IS NULL OR q.difficulty = $2::VARCHAR)
                 AND ($3::VARCHAR IS NULL OR q.topic = $3::VARCHAR)
+                AND ($4::VARCHAR IS NULL OR q.company = $4::VARCHAR)
                 ORDER BY RANDOM() LIMIT 1
             '''
             logging.info(f"Executing query: {query}")
-            question = await conn.fetchrow(query, user_id, difficulty, topic)
+            question = await conn.fetchrow(query, user_id, difficulty, topic, company)
         logging.info(f"Fetched question: {question}")
         return question
     except Exception as e:
@@ -167,12 +168,21 @@ async def update_daily_points(user_id, date, points):
         raise
 
 async def display_question(ctx, question):
+    difficulty = question['difficulty'].capitalize()
     points = {'easy': 60, 'medium': 80, 'hard': 120}.get(question['difficulty'], 0)
-    time_limit = {'easy': 10, 'medium': 20, 'hard': 30}.get(question['difficulty'], 15)  # in minutes
-    await ctx.send(f"Question ID: {question['id']}")
-    await ctx.send(f"Here's a {question['difficulty'].upper()} question (worth {points} points):\n\n{question['question']}\n\nDataset:\n```\n{question['datasets']}\n```\n\n⏳ You have {time_limit} minutes to answer this question.\nTo submit your answer, use the `!submit` command followed by your SQL query.")
-    await ctx.send("You can use `!skip` to skip this question if you're stuck.")
-    await ctx.send(f"If you think there's an issue with this question, use `!report {question['id']} <your feedback>` to report it.")
+    
+    message = f"Question ID: {question['id']}\n"
+    message += f"Difficulty: {difficulty} ({points} points)\n"
+    if question.get('topic'):
+        message += f"Topic: {question['topic']}\n"
+    if question.get('company'):
+        message += f"Company: {question['company']}\n"
+    message += f"\n{question['question']}\n"
+    if question['datasets']:
+        message += f"\nDataset:\n```\n{question['datasets']}\n```"
+    message += "\nUse `!submit` followed by your SQL query to answer!"
+    
+    await ctx.send(message)
 
 async def check_daily_limit(ctx, user_id):
     today = get_ist_time().date()
@@ -243,50 +253,61 @@ async def submit(ctx, *, answer):
 
 async def process_answer(ctx, user_id, answer):
     question = await user_questions.get(user_id)
-    logging.info(f"Retrieved question for user {user_id}: {question['id']}")
-    if similar(answer.lower(), question['answer'].lower()) >= 0.8:
-        points = await calculate_points(user_id, True, question['difficulty'])
-        await ctx.send("🎉 Brilliant! You've cracked the code! 🧠💡")
-        await ctx.send(f"You've earned {points} points! 🌟")
-        await ctx.send("Keep up the fantastic work, SQL wizard! 🧙‍♂️")
-        
-        # Add this section to show available commands
-        await ctx.send("\nHere are some commands you might find useful:")
-        await ctx.send("`!my_stats` - View your overall statistics")
-        await ctx.send("`!daily_progress` - Check your progress for today")
-        await ctx.send("`!weekly_progress` - See your progress this week")
-        await ctx.send("`!leaderboard` - View the top performers")
-        await ctx.send("`!sql` - Get another question (if not on cooldown)")
-    else:
-        points = -10  # Reduce points for incorrect answers
-        current_attempts = await user_attempts.get(user_id, 0)
-        await user_attempts.set(user_id, current_attempts + 1)
-        if current_attempts == 0:
-            await ctx.send(f"❌ Oops! Not quite there yet, but don't give up! 💪\n"
-                           f"You've lost {abs(points)} points. 📉\n"
-                           f"You have one more try! Use `!try_again` to attempt once more. 🔄\n"
-                           f"To get a hint, type `!hint`. You've got this! ")
-        else:
-            await ctx.send(f"❌ Sorry, that's not correct. You've used all your attempts.\n"
-                           f"You've lost {abs(points)} points. \n"
-                           f"Keep practicing and you'll improve!")
+    if not question:
+        await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
+        return
 
-    ist_time = get_ist_time()
-    today = ist_time.date()
+    is_correct, feedback = check_answer(answer, question['answer'])
+    points = await calculate_points(user_id, is_correct, question['difficulty'])
+
+    current_attempts = await user_attempts.get(user_id, 0)
+
+    if not is_correct:
+        if current_attempts < 1:  # Allow two attempts (0 and 1)
+            # Check daily limit only for incorrect answers
+            if not await check_daily_limit(ctx, user_id):
+                return
+            await update_daily_points(user_id, get_ist_time().date(), points)
+            await update_weekly_points(user_id, points)
+            await ctx.send(f"Sorry, that's not correct. {feedback}\n"
+                           f"You lost {abs(points)} points.\n"
+                           f"You can use `!try_again` to attempt the question once more.")
+        else:
+            await ctx.send(f"Sorry, that's not correct. {feedback}\n"
+                           f"You've used all your attempts for this question. Use `!sql` to get a new question.")
+            await user_questions.pop(user_id, None)
+            await user_attempts.pop(user_id, None)
+    else:
+        await update_daily_points(user_id, get_ist_time().date(), points)
+        await update_weekly_points(user_id, points)
+        await ctx.send(f"Correct! Well done. You earned {points} points.")
+        
+        # Update achievements
+        await update_user_achievements(ctx, user_id)
+        
+        # Suggest next actions
+        await ctx.send("Great job! Here are some options for your next challenge:")
+        await ctx.send("1. `!sql` for a random question")
+        if question.get('topic'):
+            await ctx.send(f"2. `!topic {question['topic']}` for another question on the same topic")
+        if question.get('company'):
+            await ctx.send(f"3. `!company {question['company']}` for another question from the same company")
+
+        await user_questions.pop(user_id, None)
+        await user_attempts.pop(user_id, None)
+
+    # Update user_attempts
+    await user_attempts.set(user_id, current_attempts + 1)
+
+    # Update user submissions
     try:
         async with bot.db.acquire() as conn:
             await conn.execute('''
-                INSERT INTO user_submissions (user_id, question_id, submitted_at, points)
-                VALUES ($1, $2, $3, $4)
-            ''', user_id, question['id'], ist_time, points)
-            
-            await update_weekly_points(user_id, points)
-            await update_daily_points(user_id, today, points)
-
-        await user_questions.pop(user_id)  # Remove the question after submission
+                INSERT INTO user_submissions (user_id, question_id, is_correct, points, submitted_at)
+                VALUES ($1, $2, $3, $4, $5)
+            ''', user_id, question['id'], is_correct, points, datetime.now(timezone.utc))
     except Exception as e:
-        logging.error(f"Error in submit command: {e}", exc_info=True)
-        await ctx.send("An unexpected error occurred while processing your submission. Please try again later or contact the administrator.")
+        logging.error(f"Error updating user submissions: {e}")
 
 @bot.command()
 async def my_stats(ctx):
@@ -451,7 +472,7 @@ async def try_again(ctx):
         await ctx.send("You don't have any attempts left or there's no active question for you.")
 
 @bot.command()
-async def top_10(ctx):
+async def leaderboard(ctx):
     try:
         async with bot.db.acquire() as conn:
             top_users = await conn.fetch('''
@@ -467,9 +488,9 @@ async def top_10(ctx):
             table = create_discord_table(headers, data)
             await ctx.send(f"🏆 Top 10 Leaderboard 🏆\n{table}")
         else:
-            await ctx.send("No users on the leaderboard yet.")
+            await ctx.send("No users on the leaderboard yet. Start answering questions to climb the ranks!")
     except Exception as e:
-        logging.error(f"Error in top_10 command: {e}")
+        logging.error(f"Error in leaderboard command: {e}")
         await ctx.send("An error occurred while fetching the leaderboard. Please try again later.")
 
 @bot.command()
@@ -489,15 +510,10 @@ async def weekly_heroes(ctx):
             ''', week_start)
         
         if top_users:
-            headers = ["Rank", "User", "Submissions", "Points", "Streak"]
+            headers = ["Rank", "User", "Submissions", "Points"]
             data = []
             for i, user in enumerate(top_users, 1):
-                try:
-                    streak = await get_user_streak(user['user_id'])
-                except Exception as e:
-                    logging.error(f"Error getting streak for user {user['user_id']}: {e}")
-                    streak = 0
-                data.append((i, user['username'], user['submissions'], user['points'], f"{streak} days"))
+                data.append((i, user['username'], user['submissions'], user['points']))
             table = create_discord_table(headers, data)
             await ctx.send(f"🦸 Weekly Heroes \n{table}")
         else:
@@ -533,21 +549,17 @@ async def report(ctx, question_id: int, *, feedback):
 @bot.command()
 async def skip(ctx):
     user_id = ctx.author.id
-    await user_skips.set(user_id, True)
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
 
-    if user_id not in user_questions:
-        await ctx.send("There's no active question. Use `!question` to get a question first.")
-        return
-
-    if user_id in user_skips and user_skips[user_id]:
-        await ctx.send("You've already used your skip for this question. Please answer the current question or wait for the next one.")
+    question = await user_questions.get(user_id)
+    if not question:
+        await ctx.send("There's no active question. Use `!sql` to get a question first.")
         return
 
     try:
         new_question = await get_question(user_id=user_id)
         if new_question:
             await user_questions.set(user_id, new_question)
-            await user_skips.set(user_id, True)
             await display_question(ctx, new_question)
             await ctx.send("Question skipped. Here's a new question for you.")
         else:
@@ -845,7 +857,7 @@ async def sql_battle(ctx):
     await user_last_active.set(ctx.author.id, datetime.now(timezone.utc))
     await ctx.send("SQL Battle is starting! React with 👍 to join. The battle will begin in 30 seconds.")
     message = await ctx.send("Waiting for players...")
-    await message.add_reaction("👍")
+    await message.add_reaction("����")
 
     await asyncio.sleep(30)
 
@@ -1029,10 +1041,10 @@ async def ensure_tables_exist():
                     id SERIAL PRIMARY KEY,
                     question TEXT NOT NULL,
                     answer TEXT NOT NULL,
+                    difficulty VARCHAR(10) NOT NULL,
+                    topic VARCHAR(50),
                     datasets TEXT,
-                    difficulty VARCHAR(25) NOT NULL,
-                    hint TEXT,
-                    topic TEXT
+                    company VARCHAR(255)  -- Add this line
                 );
 
                 CREATE TABLE IF NOT EXISTS reports (
@@ -1340,7 +1352,7 @@ async def send_personal_message(user):
         "6. 💪 Challenge yourself: Try `!sql_battle` to compete in real-time.\n"
         "7. 🎯 Customize your experience: Use `!set_preference` to choose your difficulty level.\n\n"
         "We're excited to have you on board! If you have any questions or feedback, feel free to reach out.\n\n"
-        "Happy querying! 🚀"
+        "Happy querying! "
     )
     try:
         await user.send(personal_message)
@@ -1371,6 +1383,49 @@ async def send_personal_message_to_all():
                     failed_count += 1
     
     logging.info(f"Personal message sent to {sent_count} users. Failed for {failed_count} users.")
+
+@bot.command()
+async def company(ctx, *, company_name):
+    await get_company_question(ctx, company_name)
+
+async def get_company_question(ctx, company):
+    user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
+    username = str(ctx.author)
+    await ensure_user_exists(user_id, username)
+    try:
+        question = await get_question(company=company, user_id=user_id)
+        if question:
+            await user_questions.set(user_id, question)
+            await display_question(ctx, question)
+        else:
+            await ctx.send(f"Sorry, no questions available for the company '{company}' at the moment.")
+    except Exception as e:
+        logging.error(f"Error in company question command: {e}")
+        await ctx.send("An error occurred while fetching a question. Please try again later.")
+
+@bot.command()
+@commands.is_owner()
+async def hide_command(ctx, command_name: str):
+    command = bot.get_command(command_name)
+    if command:
+        command.hidden = True
+        await ctx.send(f"Command '{command_name}' has been hidden from the help menu.")
+    else:
+        await ctx.send(f"Command '{command_name}' not found.")
+
+@bot.event
+async def on_ready():
+    message = await bot.get_channel(CHANNEL_IDS[0]).send("Initializing...")
+    await hide_command(await bot.get_context(message), "skip")
+    await message.delete()
+
+def check_answer(user_answer, correct_answer):
+    # Implement your answer checking logic here
+    # This is a simple example, you might want to make it more sophisticated
+    is_correct = user_answer.strip().lower() == correct_answer.strip().lower()
+    feedback = "Your answer is correct!" if is_correct else "Your answer is incorrect. Please try again."
+    return is_correct, feedback
 
 if __name__ == "__main__":
     required_vars = ['DATABASE_URL', 'DISCORD_TOKEN', 'CHANNEL_ID']
