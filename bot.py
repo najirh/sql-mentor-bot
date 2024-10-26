@@ -334,37 +334,37 @@ async def process_answer(ctx, user_id, answer):
 
     await update_user_achievements(ctx, user_id)
 
-@bot.command()
-@db_connection_required()
-async def my_stats(ctx):
-    user_id = ctx.author.id
-    async with DB_SEMAPHORE:
-        async with bot.db.acquire() as conn:
-            stats = await conn.fetchrow('''
-                SELECT 
-                    COUNT(*) as total_questions,
-                    SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as correct_answers,
-                    AVG(points) as avg_points,
-                    SUM(points) as total_points
-                FROM user_submissions
-                WHERE user_id = $1
-            ''', user_id)
+# @bot.command()
+# @db_connection_required()
+# async def my_stats(ctx):
+#     user_id = ctx.author.id
+#     async with DB_SEMAPHORE:
+#         async with bot.db.acquire() as conn:
+#             stats = await conn.fetchrow('''
+#                 SELECT 
+#                     COUNT(*) as total_questions,
+#                     SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as correct_answers,
+#                     AVG(points) as avg_points,
+#                     SUM(points) as total_points
+#                 FROM user_submissions
+#                 WHERE user_id = $1
+#             ''', user_id)
     
-    if stats and stats['total_questions'] > 0:
-        success_rate = (stats['correct_answers'] / stats['total_questions']) * 100
-        await ctx.send(f"📊 Your SQL Journey Stats 📊\n\n"
-                       f"🔢 Total Questions: {stats['total_questions']}\n"
-                       f"✅ Correct Answers: {stats['correct_answers']}\n"
-                       f"📈 Success Rate: {success_rate:.2f}%\n"
-                       f"⭐ Average Points: {stats['avg_points']:.2f}\n"
-                       f"💰 Total Points: {stats['total_points']}\n\n"
-                       f"🌟 Keep coding and climbing the ranks! 🚀\n"
-                       f"Remember, every query makes you stronger! 💪")
-    else:
-        await ctx.send("🚀 Your SQL Adventure Awaits! 🚀\n\n"
-                       "You haven't answered any questions yet. Let's change that!\n"
-                       "Use `!sql` to get your first question and start your journey.\n\n"
-                       "Remember, every SQL master started as a beginner. Your coding adventure begins now! 💪✨")
+#     if stats and stats['total_questions'] > 0:
+#         success_rate = (stats['correct_answers'] / stats['total_questions']) * 100
+#         await ctx.send(f"📊 Your SQL Journey Stats 📊\n\n"
+#                        f"🔢 Total Questions: {stats['total_questions']}\n"
+#                        f"✅ Correct Answers: {stats['correct_answers']}\n"
+#                        f"📈 Success Rate: {success_rate:.2f}%\n"
+#                        f"⭐ Average Points: {stats['avg_points']:.2f}\n"
+#                        f"💰 Total Points: {stats['total_points']}\n\n"
+#                        f"🌟 Keep coding and climbing the ranks! 🚀\n"
+#                        f"Remember, every query makes you stronger! 💪")
+#     else:
+#         await ctx.send("🚀 Your SQL Adventure Awaits! 🚀\n\n"
+#                        "You haven't answered any questions yet. Let's change that!\n"
+#                        "Use `!sql` to get your first question and start your journey.\n\n"
+#                        "Remember, every SQL master started as a beginner. Your coding adventure begins now! 💪✨")
 
 @tasks.loop(time=time(hour=0, minute=0))  # Midnight IST
 async def reset_daily_points():
@@ -672,7 +672,7 @@ async def daily_question():
                     await channel.send("Sorry, no questions available for today's daily question.")
     except Exception as e:
         logging.error(f"Error in daily_question task: {e}")
-
+# keeping it
 @bot.command()
 @db_connection_required()
 async def my_stats(ctx):
@@ -1837,20 +1837,15 @@ async def db_operation(operation, *args):
         except Exception as e:
             logging.error(f"Database operation error: {e}")
             raise
-
+# -- updated code
 async def update_user_stats(user_id, points, is_correct):
     try:
         async with DB_SEMAPHORE:
             async with bot.db.acquire() as conn:
                 await conn.execute('''
-                    INSERT INTO user_stats (user_id, total_points, correct_answers, total_answers)
-                    VALUES ($1, $2, $3, 1)
-                    ON CONFLICT (user_id)
-                    DO UPDATE SET
-                        total_points = user_stats.total_points + $2,
-                        correct_answers = user_stats.correct_answers + $3,
-                        total_answers = user_stats.total_answers + 1
-                ''', user_id, points, int(is_correct))
+                    INSERT INTO user_submissions (user_id, points, is_correct)
+                    VALUES ($1, $2, $3)
+                ''', user_id, points, is_correct)
         
         # Update weekly points
         await update_weekly_points(user_id, points)
