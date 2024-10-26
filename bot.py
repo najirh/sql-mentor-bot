@@ -1213,7 +1213,7 @@ async def calculate_points(user_id, is_correct, difficulty):
         streak_bonus = min(streak * 10, 100)  # Doubled streak bonus, capped at 100
         return base_points + streak_bonus
     else:
-        return -40  # Doubled deduction for incorrect answers
+        return -10  # Doubled deduction for incorrect answers
 
 async def get_topic_question(ctx, topic_name):
     user_id = ctx.author.id
