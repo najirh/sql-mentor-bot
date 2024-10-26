@@ -404,26 +404,26 @@ async def on_command_error(ctx, error):
 async def on_disconnect():
     print("Bot disconnected from Discord")
 
-@bot.command(name='help')
-async def help(ctx):
-    help_text = """
-    Available commands:
-    `!sql`: Get a random SQL question based on your preference
-    `!easy`, `!medium`, `!hard`: Get a question of specific difficulty
-    `!topic`: List all available topics or get a question on a specific SQL topic
-    `!company`: List all available companies or practice questions from a specific company
-    `!submit <answer>`: Submit your answer to the current question
-    `!report <question_id> <feedback>`: Report an issue with a question
-    `!top_10`: View the current leaderboard
-    `!weekly_heroes`: View this week's top performers
-    `!my_stats`: Check your personal progress and achievements
-    `!set_preference <difficulty>`: Set your preferred question difficulty
-    `!reset_preference`: Reset your difficulty preference
-    `!submit_question <your question>`: Submit a new question for review
+# @bot.command(name='help')
+# async def help(ctx):
+#     help_text = """
+#     Available commands:
+#     `!sql`: Get a random SQL question based on your preference
+#     `!easy`, `!medium`, `!hard`: Get a question of specific difficulty
+#     `!topic`: List all available topics or get a question on a specific SQL topic
+#     `!company`: List all available companies or practice questions from a specific company
+#     `!submit <answer>`: Submit your answer to the current question
+#     `!report <question_id> <feedback>`: Report an issue with a question
+#     `!top_10`: View the current leaderboard
+#     `!weekly_heroes`: View this week's top performers
+#     `!my_stats`: Check your personal progress and achievements
+#     `!set_preference <difficulty>`: Set your preferred question difficulty
+#     `!reset_preference`: Reset your difficulty preference
+#     `!submit_question <your question>`: Submit a new question for review
 
-    For more detailed help on each command, use `!help <command_name>`.
-    """
-    await ctx.send(help_text)
+#     For more detailed help on each command, use `!help <command_name>`.
+#     """
+#     await ctx.send(help_text)
 
 @bot.command()
 async def easy(ctx):
@@ -1512,25 +1512,25 @@ async def weekly_progress(ctx):
                    f"You're making great strides! 🚀")
 
                    
-@bot.command()
-async def help(ctx):
-    help_text = """
-    Available commands:
-    `!sql`: Get a random SQL question
-    `!easy`, `!medium`, `!hard`: Get a question of specific difficulty
-    `!topic`: List all available topics or get a question on a specific SQL topic
-    `!company`: List all available companies or practice questions from a specific company
-    `!submit <answer>`: Submit your answer to the current question
-    `!set_difficulty <difficulty>`: Set your preferred question difficulty
-    `!sql_battle`: Start an SQL battle with other users
-    `!my_stats`: View your overall statistics
-    `!leaderboard`: View the top 10 users
-    `!weekly_heroes`: View this week's top performers
-    `!submit_question`: Submit a new question for review
+# @bot.command()
+# async def help(ctx):
+#     help_text = """
+#     Available commands:
+#     `!sql`: Get a random SQL question
+#     `!easy`, `!medium`, `!hard`: Get a question of specific difficulty
+#     `!topic`: List all available topics or get a question on a specific SQL topic
+#     `!company`: List all available companies or practice questions from a specific company
+#     `!submit <answer>`: Submit your answer to the current question
+#     `!set_difficulty <difficulty>`: Set your preferred question difficulty
+#     `!sql_battle`: Start an SQL battle with other users
+#     `!my_stats`: View your overall statistics
+#     `!leaderboard`: View the top 10 users
+#     `!weekly_heroes`: View this week's top performers
+#     `!submit_question`: Submit a new question for review
 
-    For more detailed help on each command, use `!help <command_name>`.
-    """
-    await ctx.send(help_text)
+#     For more detailed help on each command, use `!help <command_name>`.
+#     """
+#     await ctx.send(help_text)
 
 @bot.command()
 @db_connection_required()
