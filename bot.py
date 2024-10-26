@@ -109,18 +109,18 @@ async def ensure_user_exists(user_id, username):
         raise
 
 # Add the new get_user_stats function here
-async def get_user_stats(user_id):
-    async with DB_SEMAPHORE:
-        async with bot.db.acquire() as conn:
-            stats = await conn.fetchrow('''
-                SELECT 
-                    COUNT(*) as total_answers,
-                    SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as correct_answers,
-                    SUM(points) as total_points
-                FROM user_submissions
-                WHERE user_id = $1
-            ''', user_id)
-    return stats
+# async def get_user_stats(user_id):
+#     async with DB_SEMAPHORE:
+#         async with bot.db.acquire() as conn:
+#             stats = await conn.fetchrow('''
+#                 SELECT 
+#                     COUNT(*) as total_answers,
+#                     SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as correct_answers,
+#                     SUM(points) as total_points
+#                 FROM user_submissions
+#                 WHERE user_id = $1
+#             ''', user_id)
+#     return stats
 
 async def get_question(difficulty=None, user_id=None, topic=None, company=None):
     try:
@@ -386,35 +386,35 @@ async def on_ready():
         logging.error("Database connection not established. Shutting down.")
         await bot.close()
 
-@bot.event
-async def on_error(event, *args, **kwargs):
-    logging.error(f"Unhandled error in {event}", exc_info=True)
+# @bot.event
+# async def on_error(event, *args, **kwargs):
+#     logging.error(f"Unhandled error in {event}", exc_info=True)
 
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"This command is on cooldown. Try again in {error.retry_after:.2f} seconds.")
-    elif isinstance(error, commands.CommandNotFound):
-        await ctx.send("Unknown command. Use !help to see available commands.")
-    else:
-        logging.error(f"Unhandled command error: {error}", exc_info=True)
-        await ctx.send("An error occurred while processing the command. Please try again later.")
+# @bot.event
+# async def on_command_error(ctx, error):
+#     if isinstance(error, commands.CommandOnCooldown):
+#         await ctx.send(f"This command is on cooldown. Try again in {error.retry_after:.2f} seconds.")
+#     elif isinstance(error, commands.CommandNotFound):
+#         await ctx.send("Unknown command. Use !help to see available commands.")
+#     else:
+#         logging.error(f"Unhandled command error: {error}", exc_info=True)
+#         await ctx.send("An error occurred while processing the command. Please try again later.")
 
-@bot.event
-async def on_disconnect():
-    print("Bot disconnected from Discord")
+# @bot.event
+# async def on_disconnect():
+#     print("Bot disconnected from Discord")
 
-@bot.command()
-async def easy(ctx):
-    await get_difficulty_question(ctx, 'easy')
+# @bot.command()
+# async def easy(ctx):
+#     await get_difficulty_question(ctx, 'easy')
 
-@bot.command()
-async def medium(ctx):
-    await get_difficulty_question(ctx, 'medium')
+# @bot.command()
+# async def medium(ctx):
+#     await get_difficulty_question(ctx, 'medium')
 
-@bot.command()
-async def hard(ctx):
-    await get_difficulty_question(ctx, 'hard')
+# @bot.command()
+# async def hard(ctx):
+#     await get_difficulty_question(ctx, 'hard')
 
 async def get_difficulty_question(ctx, difficulty):
     user_id = ctx.author.id
