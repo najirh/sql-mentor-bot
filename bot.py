@@ -14,6 +14,7 @@ import pytz
 import functools
 import sqlparse
 
+
 # Setup
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
@@ -67,7 +68,7 @@ DB_SEMAPHORE = asyncio.Semaphore(10)  # Increase from 5 to 10 or higher if neede
 user_timers = {}
 
 # Add this near the top of your file with other global variables
-ADMIN_IDS = [11320]  # Replace with the actual user ID of najir_11320
+ADMIN_IDS = [1235457227733864469]  # Admin user ID
 
 def similar(a, b):
     return SequenceMatcher(None, a, b).ratio()
@@ -1758,6 +1759,30 @@ async def check_scheduled_posts():
 @check_scheduled_posts.before_loop
 async def before_check_scheduled_posts():
     await bot.wait_until_ready()
+
+@bot.command()
+async def skip(ctx):
+    user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
+    
+    current_question = await user_questions.get(user_id)
+    if not current_question:
+        await ctx.send("You don't have an active question to skip. Use `!sql` to get a new question.")
+        return
+
+    # Remove the current question
+    await user_questions.pop(user_id, None)
+    await user_attempts.pop(user_id, None)
+
+    # Cancel the timer if it exists
+    if user_id in user_timers:
+        user_timers[user_id].cancel()
+        del user_timers[user_id]
+
+    await ctx.send("Question skipped. Use `!sql` to get a new question.")
+
+    # Optionally, you can automatically give a new question here
+    # await get_difficulty_question(ctx, current_question['difficulty'])
 
 def main():
     loop = asyncio.get_event_loop()
