@@ -427,7 +427,6 @@ async def help(ctx):
     `!topic`: List all available topics or get a question on a specific SQL topic
     `!company`: List all available companies or practice questions from a specific company
     `!submit <answer>`: Submit your answer to the current question
-    `!report <question_id> <feedback>`: Report an issue with a question
     `!top_10`: View the current leaderboard
     `!weekly_heroes`: View this week's top performers
     `!my_stats`: Check your personal progress and achievements
