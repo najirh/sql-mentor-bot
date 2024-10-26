@@ -344,7 +344,7 @@ async def process_answer(ctx, user_id, answer):
                        f"📊 Track your progress with these commands:\n"
                        f"• `!daily_progress` - See your progress for today\n"
                        f"• `!weekly_progress` - Check your weekly progress\n"
-                       f"• `!my_achievements` - View your achievements\n"
+                       f"• `!my_achievements` - View your achievements\n")
         await user_questions.pop(user_id, None)
         await user_attempts.pop(user_id, None)
     else:
@@ -427,6 +427,8 @@ async def help(ctx):
     `!topic`: List all available topics or get a question on a specific SQL topic
     `!company`: List all available companies or practice questions from a specific company
     `!submit <answer>`: Submit your answer to the current question
+    `!report <question_id> <feedback>`: Report an issue with a question
+    `!top_10`: View the current leaderboard
     `!weekly_heroes`: View this week's top performers
     `!my_stats`: Check your personal progress and achievements
     `!set_preference <difficulty>`: Set your preferred question difficulty
