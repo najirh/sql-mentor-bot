@@ -12,6 +12,7 @@ import random
 from discord.ext.commands import cooldown, BucketType
 from logging.handlers import RotatingFileHandler
 import pytz
+import functools
 
 # Setup
 logging.basicConfig(level=logging.INFO)
@@ -50,6 +51,8 @@ user_last_active = ThreadSafeDict()
 
 CHANNEL_IDS = [int(id.strip()) for id in os.getenv('CHANNEL_ID', '').split(',') if id.strip()]
 
+DB_SEMAPHORE = asyncio.Semaphore(5)  # Adjust the number based on your needs
+
 def similar(a, b):
     return SequenceMatcher(None, a, b).ratio()
 
@@ -65,23 +68,40 @@ async def create_db_pool():
         database_url = os.getenv('DATABASE_URL')
         if not database_url:
             raise ValueError("DATABASE_URL is not set in the environment variables")
-
+        
         logging.info("Attempting to connect to database using DATABASE_URL")
         
-        bot.db = await asyncpg.create_pool(database_url, ssl='require')
-        logging.info("Database connection established")
+        bot.db = await asyncpg.create_pool(database_url, min_size=1, max_size=10, ssl='require')
+        logging.info("Database connection pool established")
     except Exception as e:
         logging.error(f"Failed to connect to the database: {e}")
         raise
 
+def retry_on_failure(max_retries=3, delay=1):
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    return await func(*args, **kwargs)
+                except asyncpg.InterfaceError as e:
+                    if attempt == max_retries - 1:
+                        raise
+                    logging.warning(f"Database operation failed, retrying in {delay} seconds...")
+                    await asyncio.sleep(delay)
+        return wrapper
+    return decorator
+
+@retry_on_failure()
 async def ensure_user_exists(user_id, username):
     try:
-        async with bot.db.acquire() as conn:
-            await conn.execute('''
-                INSERT INTO users (user_id, username)
-                VALUES ($1, $2)
-                ON CONFLICT (user_id) DO UPDATE SET username = $2
-            ''', user_id, username)
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                await conn.execute('''
+                    INSERT INTO users (user_id, username)
+                    VALUES ($1, $2)
+                    ON CONFLICT (user_id) DO UPDATE SET username = $2
+                ''', user_id, username)
     except Exception as e:
         logging.error(f"Error ensuring user exists: {e}")
         raise
@@ -89,20 +109,21 @@ async def ensure_user_exists(user_id, username):
 async def get_question(difficulty=None, user_id=None, topic=None, company=None):
     try:
         logging.info(f"Fetching question for user_id: {user_id}, difficulty: {difficulty}, topic: {topic}, company: {company}")
-        async with bot.db.acquire() as conn:
-            query = '''
-                SELECT q.* FROM questions q
-                LEFT JOIN user_submissions us ON q.id = us.question_id AND us.user_id = $1
-                LEFT JOIN reports r ON q.id = r.question_id
-                WHERE (us.question_id IS NULL OR us.points <= 0)
-                AND r.question_id IS NULL
-                AND ($2::VARCHAR IS NULL OR q.difficulty = $2::VARCHAR)
-                AND ($3::VARCHAR IS NULL OR q.topic = $3::VARCHAR)
-                AND ($4::VARCHAR IS NULL OR q.company = $4::VARCHAR)
-                ORDER BY RANDOM() LIMIT 1
-            '''
-            logging.info(f"Executing query: {query}")
-            question = await conn.fetchrow(query, user_id, difficulty, topic, company)
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                query = '''
+                    SELECT q.* FROM questions q
+                    LEFT JOIN user_submissions us ON q.id = us.question_id AND us.user_id = $1
+                    LEFT JOIN reports r ON q.id = r.question_id
+                    WHERE (us.question_id IS NULL OR us.points <= 0)
+                    AND r.question_id IS NULL
+                    AND ($2::VARCHAR IS NULL OR q.difficulty = $2::VARCHAR)
+                    AND ($3::VARCHAR IS NULL OR q.topic = $3::VARCHAR)
+                    AND ($4::VARCHAR IS NULL OR q.company = $4::VARCHAR)
+                    ORDER BY RANDOM() LIMIT 1
+                '''
+                logging.info(f"Executing query: {query}")
+                question = await conn.fetchrow(query, user_id, difficulty, topic, company)
         logging.info(f"Fetched question: {question}")
         return question
     except Exception as e:
@@ -115,27 +136,29 @@ async def get_week_start():
 
 async def update_weekly_points(user_id, points):
     try:
-        async with bot.db.acquire() as conn:
-            week_start = await get_week_start()
-            await conn.execute('''
-                INSERT INTO weekly_points (user_id, points, week_start)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (user_id, week_start)
-                DO UPDATE SET points = weekly_points.points + EXCLUDED.points
-            ''', user_id, points, week_start)
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                week_start = await get_week_start()
+                await conn.execute('''
+                    INSERT INTO weekly_points (user_id, points, week_start)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (user_id, week_start)
+                    DO UPDATE SET points = weekly_points.points + EXCLUDED.points
+                ''', user_id, points, week_start)
     except Exception as e:
         logging.error(f"Error updating weekly points: {e}")
         raise
 
 async def get_weekly_points(user_id):
     try:
-        async with bot.db.acquire() as conn:
-            week_start = await get_week_start()
-            points = await conn.fetchval('''
-                SELECT COALESCE(points, 0)
-                FROM weekly_points
-                WHERE user_id = $1 AND week_start = $2
-            ''', user_id, week_start)
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                week_start = await get_week_start()
+                points = await conn.fetchval('''
+                    SELECT COALESCE(points, 0)
+                    FROM weekly_points
+                    WHERE user_id = $1 AND week_start = $2
+                ''', user_id, week_start)
         return points
     except Exception as e:
         logging.error(f"Error getting weekly points: {e}")
@@ -143,12 +166,13 @@ async def get_weekly_points(user_id):
 
 async def get_daily_points(user_id, date):
     try:
-        async with bot.db.acquire() as conn:
-            points = await conn.fetchval('''
-                SELECT COALESCE(points, 0)
-                FROM daily_points
-                WHERE user_id = $1 AND date = $2
-            ''', user_id, date)
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                points = await conn.fetchval('''
+                    SELECT COALESCE(points, 0)
+                    FROM daily_points
+                    WHERE user_id = $1 AND date = $2
+                ''', user_id, date)
         return points or 0  # Return 0 if points is None
     except Exception as e:
         logging.error(f"Error getting daily points: {e}")
@@ -156,13 +180,14 @@ async def get_daily_points(user_id, date):
 
 async def update_daily_points(user_id, date, points):
     try:
-        async with bot.db.acquire() as conn:
-            await conn.execute('''
-                INSERT INTO daily_points (user_id, date, points)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (user_id, date)
-                DO UPDATE SET points = daily_points.points + EXCLUDED.points
-            ''', user_id, date, points)
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                await conn.execute('''
+                    INSERT INTO daily_points (user_id, date, points)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (user_id, date)
+                    DO UPDATE SET points = daily_points.points + EXCLUDED.points
+                ''', user_id, date, points)
     except Exception as e:
         logging.error(f"Error updating daily points: {e}")
         raise
@@ -196,11 +221,12 @@ async def check_daily_limit(ctx, user_id):
 
 async def get_daily_submissions(user_id, date):
     try:
-        async with bot.db.acquire() as conn:
-            submissions = await conn.fetchval('''
-                SELECT COUNT(*) FROM user_submissions
-                WHERE user_id = $1 AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
-            ''', user_id, date)
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                submissions = await conn.fetchval('''
+                    SELECT COUNT(*) FROM user_submissions
+                    WHERE user_id = $1 AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
+                ''', user_id, date)
         return submissions
     except Exception as e:
         logging.error(f"Error getting daily submissions: {e}")
@@ -223,11 +249,12 @@ async def sql(ctx):
     await ensure_user_exists(user_id, username)
 
     try:
-        async with bot.db.acquire() as conn:
-            preference = await conn.fetchval('''
-                SELECT preferred_difficulty FROM user_preferences
-                WHERE user_id = $1
-            ''', user_id)
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                preference = await conn.fetchval('''
+                    SELECT preferred_difficulty FROM user_preferences
+                    WHERE user_id = $1
+                ''', user_id)
         
         question = await get_question(difficulty=preference, user_id=user_id)
         if question:
@@ -309,11 +336,12 @@ async def process_answer(ctx, user_id, answer):
 
     # Update user submissions
     try:
-        async with bot.db.acquire() as conn:
-            await conn.execute('''
-                INSERT INTO user_submissions (user_id, question_id, is_correct, points, submitted_at)
-                VALUES ($1, $2, $3, $4, $5)
-            ''', user_id, question['id'], is_correct, points, datetime.now(timezone.utc))
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                await conn.execute('''
+                    INSERT INTO user_submissions (user_id, question_id, is_correct, points, submitted_at)
+                    VALUES ($1, $2, $3, $4, $5)
+                ''', user_id, question['id'], is_correct, points, datetime.now(timezone.utc))
     except Exception as e:
         logging.error(f"Error updating user submissions: {e}")
 
@@ -324,16 +352,17 @@ async def process_answer(ctx, user_id, answer):
 @db_connection_required()
 async def my_stats(ctx):
     user_id = ctx.author.id
-    async with bot.db.acquire() as conn:
-        stats = await conn.fetchrow('''
-            SELECT 
-                COUNT(*) as total_questions,
-                SUM(CASE WHEN points > 0 THEN 1 ELSE 0 END) as correct_answers,
-                AVG(points) as avg_points,
-                SUM(points) as total_points
-            FROM user_submissions
-            WHERE user_id = $1
-        ''', user_id)
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            stats = await conn.fetchrow('''
+                SELECT 
+                    COUNT(*) as total_questions,
+                    SUM(CASE WHEN points > 0 THEN 1 ELSE 0 END) as correct_answers,
+                    AVG(points) as avg_points,
+                    SUM(points) as total_points
+                FROM user_submissions
+                WHERE user_id = $1
+            ''', user_id)
     
     if stats and stats['total_questions'] > 0:
         success_rate = (stats['correct_answers'] / stats['total_questions']) * 100
@@ -354,11 +383,12 @@ async def my_stats(ctx):
 @tasks.loop(time=time(hour=0, minute=0))  # Midnight IST
 async def reset_daily_points():
     try:
-        async with bot.db.acquire() as conn:
-            await conn.execute('''
-                DELETE FROM daily_points
-                WHERE date < CURRENT_DATE
-            ''')
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                await conn.execute('''
+                    DELETE FROM daily_points
+                    WHERE date < CURRENT_DATE
+                ''')
         logging.info("Daily points reset successfully")
     except Exception as e:
         logging.error(f"Error in reset_daily_points task: {e}")
@@ -376,13 +406,13 @@ async def on_error(event, *args, **kwargs):
 
 @bot.event
 async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
-        await ctx.send("Invalid command. Use `!help` to see available commands.")
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("You're missing a required argument. Check `!help` for command usage.")
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(f"This command is on cooldown. Try again in {error.retry_after:.2f} seconds.")
+    elif isinstance(error, commands.CommandNotFound):
+        await ctx.send("Unknown command. Use !help to see available commands.")
     else:
-        logging.error(f"Unhandled error: {error}", exc_info=True)
-        await ctx.send("An unexpected error occurred. Please try again later or contact the administrator.")
+        logging.error(f"Unhandled command error: {error}", exc_info=True)
+        await ctx.send("An error occurred while processing the command. Please try again later.")
 
 @bot.event
 async def on_disconnect():
@@ -445,11 +475,12 @@ async def question(ctx):
     await ensure_user_exists(user_id, username)
 
     try:
-        async with bot.db.acquire() as conn:
-            preference = await conn.fetchval('''
-                SELECT preferred_difficulty FROM user_preferences
-                WHERE user_id = $1
-            ''', user_id)
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                preference = await conn.fetchval('''
+                    SELECT preferred_difficulty FROM user_preferences
+                    WHERE user_id = $1
+                ''', user_id)
         
         question = await get_question(difficulty=preference, user_id=user_id)
         if question:
@@ -474,13 +505,14 @@ async def try_again(ctx):
 @bot.command()
 async def leaderboard(ctx):
     try:
-        async with bot.db.acquire() as conn:
-            top_users = await conn.fetch('''
-                SELECT u.username, l.points 
-                FROM leaderboard l
-                JOIN users u ON l.user_id = u.user_id
-                ORDER BY l.points DESC LIMIT 10
-            ''')
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                top_users = await conn.fetch('''
+                    SELECT u.username, l.points 
+                    FROM leaderboard l
+                    JOIN users u ON l.user_id = u.user_id
+                    ORDER BY l.points DESC LIMIT 10
+                ''')
         
         if top_users:
             headers = ["Rank", "User", "Points"]
@@ -497,17 +529,18 @@ async def leaderboard(ctx):
 async def weekly_heroes(ctx):
     await user_last_active.set(ctx.author.id, datetime.now(timezone.utc))  # Add this line
     try:
-        async with bot.db.acquire() as conn:
-            week_start = await get_week_start()
-            top_users = await conn.fetch('''
-                SELECT u.user_id, u.username, COUNT(*) as submissions, SUM(us.points) as points
-                FROM user_submissions us
-                JOIN users u ON us.user_id = u.user_id
-                WHERE us.submitted_at >= $1
-                GROUP BY u.user_id, u.username
-                ORDER BY submissions DESC, points DESC
-                LIMIT 10
-            ''', week_start)
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                week_start = await get_week_start()
+                top_users = await conn.fetch('''
+                    SELECT u.user_id, u.username, COUNT(*) as submissions, SUM(us.points) as points
+                    FROM user_submissions us
+                    JOIN users u ON us.user_id = u.user_id
+                    WHERE us.submitted_at >= $1
+                    GROUP BY u.user_id, u.username
+                    ORDER BY submissions DESC, points DESC
+                    LIMIT 10
+                ''', week_start)
         
         if top_users:
             headers = ["Rank", "User", "Submissions", "Points"]
@@ -528,18 +561,19 @@ async def report(ctx, question_id: int, *, feedback):
     username = str(ctx.author)
     await ensure_user_exists(user_id, username)
     try:
-        async with bot.db.acquire() as conn:
-            # Check if the question exists
-            question = await conn.fetchrow('SELECT * FROM questions WHERE id = $1', question_id)
-            if not question:
-                await ctx.send(f"Question with ID {question_id} does not exist.")
-                return
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                # Check if the question exists
+                question = await conn.fetchrow('SELECT * FROM questions WHERE id = $1', question_id)
+                if not question:
+                    await ctx.send(f"Question with ID {question_id} does not exist.")
+                    return
 
-            # Insert the report
-            await conn.execute('''
-                INSERT INTO reports (reported_by, question_id, remarks)
-                VALUES ($1, $2, $3)
-            ''', user_id, question_id, feedback)
+                # Insert the report
+                await conn.execute('''
+                    INSERT INTO reports (reported_by, question_id, remarks)
+                    VALUES ($1, $2, $3)
+                ''', user_id, question_id, feedback)
 
         await ctx.send(f"Thank you for your feedback. Your report for question {question_id} has been submitted and will be reviewed by our team.")
     except Exception as e:
@@ -558,30 +592,32 @@ async def topic(ctx, *, topic_name=None):
         return
 
     try:
-        async with bot.db.acquire() as conn:
-            topics = await conn.fetch("SELECT DISTINCT topic FROM questions WHERE topic IS NOT NULL")
-            topics = [t['topic'].lower() for t in topics]
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                topics = await conn.fetch("SELECT DISTINCT topic FROM questions WHERE topic IS NOT NULL")
+                topics = [t['topic'].lower() for t in topics]
 
-            best_match = max(topics, key=lambda x: similar(x, topic_name.lower()))
-            if similar(best_match, topic_name.lower()) < 0.9:  # 90% accuracy
-                await ctx.send(f"No close match found for '{topic_name}'. Here are the available topics:")
-                await list_topics(ctx)
-                return
+                best_match = max(topics, key=lambda x: similar(x, topic_name.lower()))
+                if similar(best_match, topic_name.lower()) < 0.9:  # 90% accuracy
+                    await ctx.send(f"No close match found for '{topic_name}'. Here are the available topics:")
+                    await list_topics(ctx)
+                    return
 
-            question = await get_question(topic=best_match, user_id=user_id)
-            if question:
-                await user_questions.set(user_id, question)
-                await display_question(ctx, question)
-            else:
-                await ctx.send(f"Sorry, no more questions available for the topic '{best_match.title()}' at the moment.")
+                question = await get_question(topic=best_match, user_id=user_id)
+                if question:
+                    await user_questions.set(user_id, question)
+                    await display_question(ctx, question)
+                else:
+                    await ctx.send(f"Sorry, no more questions available for the topic '{best_match.title()}' at the moment.")
     except Exception as e:
         logging.error(f"Error in topic question command: {e}")
         await ctx.send("An error occurred while fetching a question. Please try again later.")
 
 async def list_topics(ctx):
     try:
-        async with bot.db.acquire() as conn:
-            topics = await conn.fetch("SELECT DISTINCT topic FROM questions WHERE topic IS NOT NULL ORDER BY topic")
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                topics = await conn.fetch("SELECT DISTINCT topic FROM questions WHERE topic IS NOT NULL ORDER BY topic")
         
         if topics:
             topic_list = ", ".join([f"{t['topic']}" for t in topics])
@@ -606,12 +642,13 @@ async def hint(ctx):
 @bot.command()
 async def list_categories(ctx):
     try:
-        async with bot.db.acquire() as conn:
-            categories = await conn.fetch('''
-                SELECT DISTINCT category FROM questions
-                WHERE category IS NOT NULL
-                ORDER BY category
-            ''')
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                categories = await conn.fetch('''
+                    SELECT DISTINCT category FROM questions
+                    WHERE category IS NOT NULL
+                    ORDER BY category
+                ''')
         
         if categories:
             category_list = ", ".join([f"📁 {cat['category']}" for cat in categories])
@@ -648,13 +685,14 @@ async def daily_question():
 @tasks.loop(time=time(hour=3, minute=30))  # 3:30 AM IST (10 PM UTC)
 async def update_leaderboard():
     try:
-        async with bot.db.acquire() as conn:
-            top_users = await conn.fetch('''
-                SELECT u.username, l.points 
-                FROM leaderboard l
-                JOIN users u ON l.user_id = u.user_id
-                ORDER BY l.points DESC LIMIT 10
-            ''')
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                top_users = await conn.fetch('''
+                    SELECT u.username, l.points 
+                    FROM leaderboard l
+                    JOIN users u ON l.user_id = u.user_id
+                    ORDER BY l.points DESC LIMIT 10
+                ''')
         
         if top_users:
             headers = ["Rank", "User", "Points"]
@@ -732,12 +770,13 @@ async def question_timer(ctx, question_id, time_limit):
         current_question = None
 
 async def get_challenge_questions(num_questions=5):
-    async with bot.db.acquire() as conn:
-        questions = await conn.fetch('''
-            SELECT * FROM questions
-            ORDER BY RANDOM()
-            LIMIT $1
-        ''', num_questions)
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            questions = await conn.fetch('''
+                SELECT * FROM questions
+                ORDER BY RANDOM()
+                LIMIT $1
+            ''', num_questions)
     return questions
 
 @bot.command()
@@ -779,22 +818,24 @@ async def challenge(ctx, num_questions: int = 5):
     await ctx.send(f"Challenge complete! You answered {correct_answers}/{num_questions} questions correctly in {total_time:.2f} minutes.")
 
     # Update user stats
-    async with bot.db.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO user_challenges (user_id, total_questions, correct_answers, time_taken)
-            VALUES ($1, $2, $3, $4)
-        ''', user_id, num_questions, correct_answers, total_time)
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO user_challenges (user_id, total_questions, correct_answers, time_taken)
+                VALUES ($1, $2, $3, $4)
+            ''', user_id, num_questions, correct_answers, total_time)
 
 @bot.command()
 async def challenge_history(ctx):
     user_id = ctx.author.id
-    async with bot.db.acquire() as conn:
-        history = await conn.fetch('''
-            SELECT * FROM user_challenges
-            WHERE user_id = $1
-            ORDER BY completed_at DESC
-            LIMIT 5
-        ''', user_id)
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            history = await conn.fetch('''
+                SELECT * FROM user_challenges
+                WHERE user_id = $1
+                ORDER BY completed_at DESC
+                LIMIT 5
+            ''', user_id)
 
     if history:
         await ctx.send("Your recent challenge history:")
@@ -889,12 +930,13 @@ async def set_difficulty(ctx, difficulty: str):
         await ctx.send(f"❌ Invalid difficulty. Please choose from: {', '.join(valid_difficulties)}")
         return
 
-    async with bot.db.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO user_preferences (user_id, preferred_difficulty)
-            VALUES ($1, $2)
-            ON CONFLICT (user_id) DO UPDATE SET preferred_difficulty = $2
-        ''', user_id, difficulty.lower())
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO user_preferences (user_id, preferred_difficulty)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id) DO UPDATE SET preferred_difficulty = $2
+            ''', user_id, difficulty.lower())
     
     emoji = difficulty_emojis[difficulty.lower()]
     await ctx.send(f"{emoji} Great choice! Your preferred difficulty has been set to **{difficulty}**.\n\n"
@@ -905,12 +947,13 @@ async def set_difficulty(ctx, difficulty: str):
 async def reset_preference(ctx):
     user_id = ctx.author.id
     try:
-        async with bot.db.acquire() as conn:
-            await conn.execute('''
-                UPDATE user_preferences
-                SET preferred_difficulty = NULL
-                WHERE user_id = $1
-            ''', user_id)
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                await conn.execute('''
+                    UPDATE user_preferences
+                    SET preferred_difficulty = NULL
+                    WHERE user_id = $1
+                ''', user_id)
         await ctx.send("🔄 Your difficulty preference has been reset. You'll now receive questions from all difficulties.\n\n"
                        "To set a new preference, use `!set_difficulty <easy/medium/hard>`")
     except Exception as e:
@@ -924,23 +967,25 @@ async def rate_question(ctx, question_id: int, rating: int):
         return
 
     user_id = ctx.author.id
-    async with bot.db.acquire() as conn:
-        await conn.execute('''
-            INSERT INTO question_ratings (user_id, question_id, rating)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (user_id, question_id) DO UPDATE SET rating = $3
-        ''', user_id, question_id, rating)
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO question_ratings (user_id, question_id, rating)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (user_id, question_id) DO UPDATE SET rating = $3
+            ''', user_id, question_id, rating)
     
     await ctx.send(f"Thank you for rating question {question_id}!")
 
 @bot.command()
 async def question_stats(ctx, question_id: int):
-    async with bot.db.acquire() as conn:
-        stats = await conn.fetchrow('''
-            SELECT AVG(rating) as avg_rating, COUNT(*) as total_ratings
-            FROM question_ratings
-            WHERE question_id = $1
-        ''', question_id)
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            stats = await conn.fetchrow('''
+                SELECT AVG(rating) as avg_rating, COUNT(*) as total_ratings
+                FROM question_ratings
+                WHERE question_id = $1
+            ''', question_id)
     
     if stats['total_ratings'] > 0:
         await ctx.send(f"Question {question_id} stats:\nAverage rating: {stats['avg_rating']:.2f}\nTotal ratings: {stats['total_ratings']}")
@@ -949,33 +994,34 @@ async def question_stats(ctx, question_id: int):
 
 async def check_achievements(user_id):
     try:
-        async with bot.db.acquire() as conn:
-            stats = await get_user_stats(user_id)
-            
-            new_achievements = []
-            all_achievements = []
-            
-            achievement_criteria = [
-                ("🎓 Beginner", stats['total_answers'] >= 10),
-                ("🏅 Intermediate", stats['total_answers'] >= 100),
-                ("🏆 Expert", stats['total_answers'] >= 1000),
-                (" Sharpshooter", stats['correct_answers'] >= 50),
-                ("👑 SQL Master", stats['correct_answers'] >= 500)
-            ]
-            
-            for achievement, condition in achievement_criteria:
-                if condition:
-                    all_achievements.append(achievement)
-                    result = await conn.fetchval('''
-                        INSERT INTO user_achievements (user_id, achievement)
-                        VALUES ($1, $2)
-                        ON CONFLICT (user_id, achievement) DO NOTHING
-                        RETURNING achievement
-                    ''', user_id, achievement)
-                    if result:
-                        new_achievements.append(achievement)
-            
-            return new_achievements, all_achievements
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                stats = await get_user_stats(user_id)
+                
+                new_achievements = []
+                all_achievements = []
+                
+                achievement_criteria = [
+                    ("🎓 Beginner", stats['total_answers'] >= 10),
+                    ("🏅 Intermediate", stats['total_answers'] >= 100),
+                    ("🏆 Expert", stats['total_answers'] >= 1000),
+                    (" Sharpshooter", stats['correct_answers'] >= 50),
+                    ("👑 SQL Master", stats['correct_answers'] >= 500)
+                ]
+                
+                for achievement, condition in achievement_criteria:
+                    if condition:
+                        all_achievements.append(achievement)
+                        result = await conn.fetchval('''
+                            INSERT INTO user_achievements (user_id, achievement)
+                            VALUES ($1, $2)
+                            ON CONFLICT (user_id, achievement) DO NOTHING
+                            RETURNING achievement
+                        ''', user_id, achievement)
+                        if result:
+                            new_achievements.append(achievement)
+                
+                return new_achievements, all_achievements
     except Exception as e:
         logging.error(f"Error in check_achievements: {e}")
         return [], []  # Return empty lists if there's an error
@@ -984,11 +1030,12 @@ async def check_achievements(user_id):
 async def my_achievements(ctx):
     user_id = ctx.author.id
     await user_last_active.set(user_id, datetime.now(timezone.utc))  # Add this line
-    async with bot.db.acquire() as conn:
-        achievements = await conn.fetch('''
-            SELECT achievement FROM user_achievements
-            WHERE user_id = $1
-        ''', user_id)
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            achievements = await conn.fetch('''
+                SELECT achievement FROM user_achievements
+                WHERE user_id = $1
+            ''', user_id)
     
     if achievements:
         achievement_list = "\n".join([f" {a['achievement']}" for a in achievements])
@@ -1013,21 +1060,22 @@ async def update_user_achievements(ctx, user_id):
 
 async def ensure_tables_exist():
     try:
-        async with bot.db.acquire() as conn:
-            await conn.execute('''
-                -- Create your tables here
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
-                    username TEXT NOT NULL
-                );
-                
-                -- Add other table creations as needed
-                
-                CREATE TABLE IF NOT EXISTS user_stats (
-                    user_id BIGINT PRIMARY KEY,
-                    streak INT DEFAULT 0
-                );
-            ''')
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                await conn.execute('''
+                    -- Create your tables here
+                    CREATE TABLE IF NOT EXISTS users (
+                        user_id BIGINT PRIMARY KEY,
+                        username TEXT NOT NULL
+                    );
+                    
+                    -- Add other table creations as needed
+                    
+                    CREATE TABLE IF NOT EXISTS user_stats (
+                        user_id BIGINT PRIMARY KEY,
+                        streak INT DEFAULT 0
+                    );
+                ''')
         logging.info("All tables created successfully")
     except Exception as e:
         logging.error(f"Error ensuring tables exist: {e}")
@@ -1059,15 +1107,16 @@ async def graceful_shutdown():
     await bot.close()
 
 async def get_user_stats(user_id):
-    async with bot.db.acquire() as conn:
-        stats = await conn.fetchrow('''
-            SELECT 
-                COUNT(*) as total_answers,
-                SUM(CASE WHEN points > 0 THEN 1 ELSE 0 END) as correct_answers,
-                SUM(points) as total_points
-            FROM user_submissions
-            WHERE user_id = $1
-        ''', user_id)
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            stats = await conn.fetchrow('''
+                SELECT 
+                    COUNT(*) as total_answers,
+                    SUM(CASE WHEN points > 0 THEN 1 ELSE 0 END) as correct_answers,
+                    SUM(points) as total_points
+                FROM user_submissions
+                WHERE user_id = $1
+            ''', user_id)
     return stats
 
 async def post_achievement_announcement(user_id, new_achievements):
@@ -1095,8 +1144,9 @@ async def check_db(ctx):
     user_id = ctx.author.id
     await user_last_active.set(user_id, datetime.now(timezone.utc))
     try:
-        async with bot.db.acquire() as conn:
-            result = await conn.fetchval("SELECT 1")
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                result = await conn.fetchval("SELECT 1")
         if result == 1:
             await ctx.send("Database connection is working!")
         else:
@@ -1129,9 +1179,10 @@ async def get_topic_question(ctx, topic_name):
     username = str(ctx.author)
     await ensure_user_exists(user_id, username)
     try:
-        async with bot.db.acquire() as conn:
-            topics = await conn.fetch("SELECT DISTINCT topic FROM questions WHERE topic IS NOT NULL")
-            topics = [t['topic'].lower() for t in topics]
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                topics = await conn.fetch("SELECT DISTINCT topic FROM questions WHERE topic IS NOT NULL")
+                topics = [t['topic'].lower() for t in topics]
 
         best_match = max(topics, key=lambda x: similar(x, topic_name.lower()))
         if similar(best_match, topic_name.lower()) < 0.9:  # 90% accuracy
@@ -1174,12 +1225,13 @@ async def set_preference(ctx, *, preference=None):
                            f"Please try again with a valid option.")
             return
 
-        async with bot.db.acquire() as conn:
-            await conn.execute('''
-                INSERT INTO user_preferences (user_id, preferred_difficulty)
-                VALUES ($1, $2)
-                ON CONFLICT (user_id) DO UPDATE SET preferred_difficulty = $2
-            ''', user_id, preference.lower())
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                await conn.execute('''
+                    INSERT INTO user_preferences (user_id, preferred_difficulty)
+                    VALUES ($1, $2)
+                    ON CONFLICT (user_id) DO UPDATE SET preferred_difficulty = $2
+                ''', user_id, preference.lower())
 
         await ctx.send(f"Your preferred difficulty has been set to '{preference}'. "
                        f"You can reset it anytime using the `!reset_preference` command.")
@@ -1196,11 +1248,12 @@ async def submit_question(ctx, *, question):
     submitted_at = datetime.now(timezone.utc)
     
     try:
-        async with bot.db.acquire() as conn:
-            await conn.execute('''
-                INSERT INTO submitted_questions (user_id, username, question, submitted_at)
-                VALUES ($1, $2, $3, $4)
-            ''', user_id, username, question, submitted_at)
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                await conn.execute('''
+                    INSERT INTO submitted_questions (user_id, username, question, submitted_at)
+                    VALUES ($1, $2, $3, $4)
+                ''', user_id, username, question, submitted_at)
         
         await ctx.send("Thank you for your contribution! Your question has been submitted for review. All contributor names will be added to GitHub monthly.")
     except Exception as e:
@@ -1266,46 +1319,48 @@ async def company(ctx, *, company_name=None):
         return
 
     try:
-        async with bot.db.acquire() as conn:
-            # Get all companies
-            companies = await conn.fetch("SELECT DISTINCT company FROM questions WHERE company IS NOT NULL")
-            companies = [c['company'].lower() for c in companies]
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                # Get all companies
+                companies = await conn.fetch("SELECT DISTINCT company FROM questions WHERE company IS NOT NULL")
+                companies = [c['company'].lower() for c in companies]
 
-            # Find the best match
-            best_match = max(companies, key=lambda x: similar(x, company_name.lower()))
-            if similar(best_match, company_name.lower()) < 0.7:
-                await ctx.send(f"No close match found for '{company_name}'. Here are the available companies:")
-                await list_companies(ctx)
-                return
+                # Find the best match
+                best_match = max(companies, key=lambda x: similar(x, company_name.lower()))
+                if similar(best_match, company_name.lower()) < 0.7:
+                    await ctx.send(f"No close match found for '{company_name}'. Here are the available companies:")
+                    await list_companies(ctx)
+                    return
 
-            # Check if user has attempted all questions from this company
-            attempted = await conn.fetchval("""
-                SELECT COUNT(*) FROM user_submissions
-                JOIN questions ON user_submissions.question_id = questions.id
-                WHERE user_submissions.user_id = $1 AND LOWER(questions.company) = $2
-            """, user_id, best_match)
+                # Check if user has attempted all questions from this company
+                attempted = await conn.fetchval("""
+                    SELECT COUNT(*) FROM user_submissions
+                    JOIN questions ON user_submissions.question_id = questions.id
+                    WHERE user_submissions.user_id = $1 AND LOWER(questions.company) = $2
+                """, user_id, best_match)
 
-            total = await conn.fetchval("SELECT COUNT(*) FROM questions WHERE LOWER(company) = $1", best_match)
+                total = await conn.fetchval("SELECT COUNT(*) FROM questions WHERE LOWER(company) = $1", best_match)
 
-            if attempted == total:
-                await ctx.send(f"You've attempted all questions from {best_match.title()}. Try another company:")
-                await list_companies(ctx)
-                return
+                if attempted == total:
+                    await ctx.send(f"You've attempted all questions from {best_match.title()}. Try another company:")
+                    await list_companies(ctx)
+                    return
 
-            question = await get_question(company=best_match, user_id=user_id)
-            if question:
-                await user_questions.set(user_id, question)
-                await display_question(ctx, question)
-            else:
-                await ctx.send(f"Sorry, no more questions available for the company '{best_match.title()}' at the moment.")
+                question = await get_question(company=best_match, user_id=user_id)
+                if question:
+                    await user_questions.set(user_id, question)
+                    await display_question(ctx, question)
+                else:
+                    await ctx.send(f"Sorry, no more questions available for the company '{best_match.title()}' at the moment.")
     except Exception as e:
         logging.error(f"Error in company question command: {e}")
         await ctx.send("An error occurred while fetching a question. Please try again later.")
 
 async def list_companies(ctx):
     try:
-        async with bot.db.acquire() as conn:
-            companies = await conn.fetch("SELECT DISTINCT company FROM questions WHERE company IS NOT NULL ORDER BY company")
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                companies = await conn.fetch("SELECT DISTINCT company FROM questions WHERE company IS NOT NULL ORDER BY company")
         
         if companies:
             company_list = ", ".join([f"{c['company']}" for c in companies])
@@ -1325,10 +1380,11 @@ def check_answer(user_answer, correct_answer):
 
 async def get_user_streak(user_id):
     try:
-        async with bot.db.acquire() as conn:
-            streak = await conn.fetchval('''
-                SELECT streak FROM user_stats WHERE user_id = $1
-            ''', user_id)
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                streak = await conn.fetchval('''
+                    SELECT streak FROM user_stats WHERE user_id = $1
+                ''', user_id)
         return streak or 0
     except Exception as e:
         logging.error(f"Error getting user streak: {e}")
@@ -1336,18 +1392,19 @@ async def get_user_streak(user_id):
 
 async def update_user_streak(user_id, is_correct):
     try:
-        async with bot.db.acquire() as conn:
-            if is_correct:
-                await conn.execute('''
-                    INSERT INTO user_stats (user_id, streak)
-                    VALUES ($1, 1)
-                    ON CONFLICT (user_id)
-                    DO UPDATE SET streak = user_stats.streak + 1
-                ''', user_id)
-            else:
-                await conn.execute('''
-                    UPDATE user_stats SET streak = 0 WHERE user_id = $1
-                ''', user_id)
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                if is_correct:
+                    await conn.execute('''
+                        INSERT INTO user_stats (user_id, streak)
+                        VALUES ($1, 1)
+                        ON CONFLICT (user_id)
+                        DO UPDATE SET streak = user_stats.streak + 1
+                    ''', user_id)
+                else:
+                    await conn.execute('''
+                        UPDATE user_stats SET streak = 0 WHERE user_id = $1
+                    ''', user_id)
     except Exception as e:
         logging.error(f"Error updating user streak: {e}")
 
