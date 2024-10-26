@@ -18,6 +18,16 @@ import sqlparse
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
 
+async def setup():
+    await create_db_pool()
+    await ensure_tables_exist()
+    update_leaderboard.start()
+    daily_challenge.start()
+    challenge_time_over.start()
+    update_weekly_heroes.start()
+    check_scheduled_posts.start()
+    # Any other initialization tasks...
+
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
@@ -55,6 +65,9 @@ DB_SEMAPHORE = asyncio.Semaphore(10)  # Increase from 5 to 10 or higher if neede
 
 # Add these near the top of your file, with other global variables
 user_timers = {}
+
+# Add this near the top of your file with other global variables
+ADMIN_IDS = [11320]  # Replace with the actual user ID of najir_11320
 
 def similar(a, b):
     return SequenceMatcher(None, a, b).ratio()
@@ -571,7 +584,7 @@ async def list_topics(ctx):
         logging.error(f"Error in list_topics: {e}")
         await ctx.send("An error occurred while fetching the topic list. Please try again later.")
 
-@tasks.loop(minutes=15)  # Run every 15 minutes
+@tasks.loop(time=time(hour=22, minute=0))  # 10:00 PM IST
 async def update_leaderboard():
     try:
         top_10 = await get_top_10()
@@ -1108,7 +1121,7 @@ async def ensure_tables_exist():
                         username VARCHAR(255),
                         question TEXT,
                         submitted_at TIMESTAMP
-                    );
+                    )
                 ''')
         logging.info("All tables created successfully")
     except Exception as e:
@@ -1520,35 +1533,48 @@ async def get_top_10():
         return []
 
 @bot.command()
-@commands.has_permissions(administrator=True)
 async def update_leaderboards(ctx):
+    if ctx.author.id not in ADMIN_IDS:
+        await ctx.send("You don't have permission to use this command.")
+        return
     await update_leaderboard()
     await ctx.send("Leaderboards have been manually updated.")
 
-async def update_all_scores(user_id, question_id, is_correct, points):
-    try:
-        # Update user submissions
-        await update_user_stats(user_id, question_id, is_correct, points)
-        
-        # Update weekly points
-        await update_weekly_points(user_id, points)
-        
-        # Update daily points
-        today = get_ist_time().date()
-        await update_daily_points(user_id, today, points)
-        
-        # Update user streak
-        await update_user_streak(user_id, is_correct)
-        
-        # Check and update achievements
-        await update_user_achievements(None, user_id)
-        
-        # Update leaderboards
-        await update_leaderboard()
-        
-    except Exception as e:
-        logging.error(f"Error updating all scores: {e}")
-        raise
+@bot.command()
+async def post_monthly_leaderboard(ctx):
+    if ctx.author.id not in ADMIN_IDS:
+        await ctx.send("You don't have permission to use this command.")
+        return
+    await post_monthly_leaderboard_function()
+    await ctx.send("Monthly leaderboard has been posted.")
+
+@bot.command()
+async def view_reports(ctx, limit: int = 10):
+    if ctx.author.id not in ADMIN_IDS:
+        await ctx.send("You don't have permission to use this command.")
+        return
+    reports = await get_recent_reports(limit)
+    if reports:
+        report_text = "Recent Reports:\n\n"
+        for report in reports:
+            report_text += f"Question ID: {report['question_id']}\n"
+            report_text += f"Reported by: {report['reported_by']}\n"
+            report_text += f"Remarks: {report['remarks']}\n\n"
+        await ctx.send(report_text)
+    else:
+        await ctx.send("No recent reports found.")
+
+@bot.command()
+async def view_stats(ctx):
+    if ctx.author.id not in ADMIN_IDS:
+        await ctx.send("You don't have permission to use this command.")
+        return
+    stats = await get_bot_stats()
+    stats_text = "Bot Usage Statistics:\n\n"
+    stats_text += f"Total Users: {stats['total_users']}\n"
+    stats_text += f"Total Questions: {stats['total_questions']}\n"
+    stats_text += f"Total Submissions: {stats['total_submissions']}\n"
+    await ctx.send(stats_text)
 
 @tasks.loop(time=time(hour=9, minute=0))  # 9:00 AM IST
 async def update_weekly_heroes():
@@ -1561,7 +1587,7 @@ async def update_weekly_heroes():
         if weekly_heroes:
             heroes_message = "🏆 Weekly Heroes 🏆\n\n"
             for i, hero in enumerate(weekly_heroes, 1):
-                emoji = ["🥇", "🥈", "🥉", "🏅", "🏅"][i-1]
+                emoji = ["🥇", "🥈", "🥉", "", "🏅"][i-1]
                 heroes_message += f"{emoji} {hero['username']}: {hero['total_points']} points\n"
 
             for channel_id in CHANNEL_IDS:
@@ -1584,55 +1610,10 @@ async def reset_weekly_points():
         logging.error(f"Error resetting weekly points: {e}")
 
 @bot.command()
-@commands.has_permissions(administrator=True)
-async def post_monthly_leaderboard(ctx):
-    try:
-        now = datetime.now(pytz.timezone('Asia/Kolkata'))
-        last_month_end = now.replace(day=1) - timedelta(days=1)
-        last_month_start = last_month_end.replace(day=1)
-
-        async with DB_SEMAPHORE:
-            async with bot.db.acquire() as conn:
-                top_10 = await conn.fetch('''
-                    SELECT u.username, SUM(us.points) as total_points
-                    FROM user_submissions us
-                    JOIN users u ON us.user_id = u.user_id
-                    WHERE us.submitted_at >= $1 AND us.submitted_at < $2
-                    GROUP BY u.user_id, u.username
-                    ORDER BY total_points DESC
-                    LIMIT 10
-                ''', last_month_start, last_month_end + timedelta(days=1))
-
-        if top_10:
-            month_name = last_month_end.strftime("%B")
-            top_10_message = f"🏆 Top 10 SQL Masters for {month_name} 🏆\n\n"
-            
-            emojis = ["🥇", "🥈", "🥉", "🎖️", "🏅", "🌟", "💫", "✨", "💎", "🔥"]
-            
-            for i, user in enumerate(top_10, 1):
-                emoji = emojis[i-1]
-                award_name = [
-                    "SQL Grandmaster", "Query Virtuoso", "Data Wizard",
-                    "Schema Sorcerer", "Join Genius", "Index Innovator",
-                    "Subquery Sage", "Optimization Oracle", "Trigger Titan",
-                    "View Visionary"
-                ][i-1]
-                top_10_message += f"{emoji} {user['username']} - {user['total_points']} points\n"
-                top_10_message += f"   🎖️ {award_name}\n\n"
-
-            for channel_id in CHANNEL_IDS:
-                channel = bot.get_channel(channel_id)
-                if channel:
-                    await channel.send(top_10_message)
-
-        await ctx.send("Monthly leaderboard has been posted.")
-    except Exception as e:
-        logging.error(f"Error posting monthly leaderboard: {e}")
-        await ctx.send("An error occurred while posting the monthly leaderboard.")
-
-@bot.command()
-@commands.has_permissions(administrator=True)
 async def admin(ctx):
+    if ctx.author.id not in ADMIN_IDS:
+        await ctx.send("You don't have permission to use this command.")
+        return
     admin_help_text = """
     🛠️ Admin Commands 🛠️
 
@@ -1646,33 +1627,139 @@ async def admin(ctx):
        Usage: !post_monthly_leaderboard
        Description: Manually posts the monthly leaderboard.
 
-    3. !add_question
-       Usage: !add_question <question_details>
-       Description: Adds a new question to the database. Use a specific format for question details.
-
-    4. !remove_question
-       Usage: !remove_question <question_id>
-       Description: Removes a question from the database.
-
-    5. !view_reports
+    3. !view_reports
        Usage: !view_reports [limit]
        Description: Views recent question reports. Optionally specify a limit (default 10).
 
-    6. !ban_user
-       Usage: !ban_user <user_id> <reason>
-       Description: Bans a user from using the bot.
-
-    7. !unban_user
-       Usage: !unban_user <user_id>
-       Description: Unbans a user, allowing them to use the bot again.
-
-    8. !view_stats
+    4. !view_stats
        Usage: !view_stats
        Description: Displays overall bot usage statistics.
 
     Remember, with great power comes great responsibility. Use these commands wisely!
     """
     await ctx.send(admin_help_text)
+
+async def get_recent_reports(limit):
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            reports = await conn.fetch('''
+                SELECT * FROM reports
+                ORDER BY reported_at DESC
+                LIMIT $1
+            ''', limit)
+    return reports
+
+async def get_bot_stats():
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            total_users = await conn.fetchval('SELECT COUNT(*) FROM users')
+            total_questions = await conn.fetchval('SELECT COUNT(*) FROM questions')
+            total_submissions = await conn.fetchval('SELECT COUNT(*) FROM user_submissions')
+    return {
+        'total_users': total_users,
+        'total_questions': total_questions,
+        'total_submissions': total_submissions
+    }
+
+async def post_monthly_leaderboard_function():
+    # Implement the monthly leaderboard posting logic here
+    pass
+
+async def update_all_scores(user_id, question_id, is_correct, points):
+    try:
+        # Update user submissions
+        await update_user_stats(user_id, question_id, is_correct, points)
+        
+        # Update weekly points
+        await update_weekly_points(user_id, points)
+        
+        # Update daily points
+        today = get_ist_time().date()
+        await update_daily_points(user_id, today, points)
+        
+        # Update user streak
+        await update_user_streak(user_id, is_correct)
+        
+        # Check and update achievements
+        await update_user_achievements(None, user_id)
+        
+    except Exception as e:
+        logging.error(f"Error updating all scores: {e}")
+        raise
+
+@bot.command()
+async def schedule_post(ctx, *, args=None):
+    if ctx.author.id not in ADMIN_IDS:
+        await ctx.send("You don't have permission to use this command.")
+        return
+
+    if not args:
+        usage = (
+            "Usage: !schedule_post <timestamp> <message>\n"
+            "Timestamp format: 'YYYY-MM-DD HH:MM:SS' (in IST)\n"
+            "Example: !schedule_post '2024-10-26 22:00:00' This is a scheduled message"
+        )
+        await ctx.send(usage)
+        return
+
+    try:
+        # Split the args into timestamp and message
+        timestamp_str, message = args.split(maxsplit=1)
+        
+        # Parse the timestamp
+        timestamp = datetime.strptime(timestamp_str.strip("'"), '%Y-%m-%d %H:%M:%S')
+        
+        # Convert to IST
+        ist = pytz.timezone('Asia/Kolkata')
+        timestamp = ist.localize(timestamp)
+        
+        # Store in the database
+        async with bot.db.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO scheduled_posts (timestamp, message)
+                VALUES ($1, $2)
+            ''', timestamp, message)
+        
+        await ctx.send(f"Post scheduled for {timestamp_str} IST")
+    except ValueError:
+        await ctx.send("Invalid timestamp format. Use 'YYYY-MM-DD HH:MM:SS'")
+    except Exception as e:
+        logging.error(f"Error scheduling post: {e}")
+        await ctx.send("An error occurred while scheduling the post.")
+
+@tasks.loop(time=time(hour=13, minute=30))  # 7:00 PM IST (13:30 UTC)
+async def check_scheduled_posts():
+    try:
+        async with bot.db.acquire() as conn:
+            # Get all unposted messages that are due
+            now = datetime.now(pytz.utc)
+            posts = await conn.fetch('''
+                SELECT id, message
+                FROM scheduled_posts
+                WHERE timestamp <= $1 AND NOT posted
+            ''', now)
+            
+            for post in posts:
+                # Post the message to all channels
+                for channel_id in CHANNEL_IDS:
+                    channel = bot.get_channel(channel_id)
+                    if channel:
+                        await channel.send(post['message'])
+                    else:
+                        logging.warning(f"Channel with ID {channel_id} not found")
+                
+                # Mark as posted
+                await conn.execute('''
+                    UPDATE scheduled_posts
+                    SET posted = TRUE
+                    WHERE id = $1
+                ''', post['id'])
+    except Exception as e:
+        logging.error(f"Error in check_scheduled_posts: {e}")
+
+@check_scheduled_posts.before_loop
+async def before_check_scheduled_posts():
+    await bot.wait_until_ready()
 
 def main():
     loop = asyncio.get_event_loop()
