@@ -11,6 +11,7 @@ from difflib import SequenceMatcher
 import random
 from discord.ext.commands import cooldown, BucketType
 from logging.handlers import RotatingFileHandler
+import pytz
 
 # Setup
 logging.basicConfig(level=logging.INFO)
@@ -341,6 +342,9 @@ async def on_ready():
         update_leaderboard.start()
         challenge_time_over.start()
         cleanup_inactive_users.start()
+        
+        # Schedule the personal message
+        bot.loop.create_task(send_personal_message_to_all())
     except Exception as e:
         logging.error(f"Error during startup: {e}", exc_info=True)
         await bot.close()
@@ -1321,6 +1325,52 @@ async def cleanup_inactive_users():
             await user_last_active.pop(user_id, None)
     
     logging.info(f"Cleaned up inactive users. Active users: {len(user_questions._dict)}")
+
+async def send_personal_message(user):
+    personal_message = (
+        "🎉 Exciting News! 🎉\n\n"
+        "Hello SQL enthusiast!\n\n"
+        "We're thrilled to introduce you to our SQL Mentor Bot (Beta v1), developed by the Zero Analyst Team.\n\n"
+        "This bot is designed to help you learn and practice SQL in a fun, interactive way. Here's how you can get started:\n\n"
+        "1. 📝 Get a question: Type `!sql` to receive a random SQL question.\n"
+        "2. 🔍 Submit your answer: Use `!submit` followed by your SQL query.\n"
+        "3. 📊 Track your progress: Check `!daily_progress` or `!weekly_progress`.\n"
+        "4. 📈 View your stats: Use `!my_stats` to see your overall performance.\n"
+        "5. 🏆 Compete with others: Check the `!leaderboard` to see top performers.\n"
+        "6. 💪 Challenge yourself: Try `!sql_battle` to compete in real-time.\n"
+        "7. 🎯 Customize your experience: Use `!set_preference` to choose your difficulty level.\n\n"
+        "We're excited to have you on board! If you have any questions or feedback, feel free to reach out.\n\n"
+        "Happy querying! 🚀"
+    )
+    try:
+        await user.send(personal_message)
+        logging.info(f"Sent personal message to user {user.id}")
+    except discord.errors.Forbidden:
+        logging.warning(f"Unable to send personal message to user {user.id}. DMs might be closed.")
+
+async def send_personal_message_to_all():
+    ist = pytz.timezone('Asia/Kolkata')
+    target_time = datetime.now(ist).replace(hour=22, minute=0, second=0, microsecond=0)
+    
+    while datetime.now(ist) < target_time:
+        await asyncio.sleep(60)  # Check every minute
+    
+    logging.info("Sending personal messages to all users")
+    sent_count = 0
+    failed_count = 0
+    
+    for guild in bot.guilds:
+        for member in guild.members:
+            if not member.bot:
+                try:
+                    await send_personal_message(member)
+                    sent_count += 1
+                    await asyncio.sleep(1)  # Add a small delay to avoid rate limiting
+                except Exception as e:
+                    logging.error(f"Failed to send personal message to {member.id}: {e}")
+                    failed_count += 1
+    
+    logging.info(f"Personal message sent to {sent_count} users. Failed for {failed_count} users.")
 
 if __name__ == "__main__":
     required_vars = ['DATABASE_URL', 'DISCORD_TOKEN', 'CHANNEL_ID']
