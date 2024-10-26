@@ -317,6 +317,9 @@ async def process_answer(ctx, user_id, answer):
     except Exception as e:
         logging.error(f"Error updating user submissions: {e}")
 
+    # Update user streak
+    await update_user_streak(user_id, is_correct)
+
 @bot.command()
 @db_connection_required()
 async def my_stats(ctx):
@@ -391,9 +394,9 @@ async def help(ctx):
     Available commands:
     `!sql`: Get a random SQL question based on your preference
     `!easy`, `!medium`, `!hard`: Get a question of specific difficulty
-    `!topic <topic_name>`: Get a question on a specific SQL topic
+    `!topic`: List all available topics or get a question on a specific SQL topic
+    `!company`: List all available companies or practice questions from a specific company
     `!submit <answer>`: Submit your answer to the current question
-    `!skip`: Skip the current question (only available during a question)
     `!report <question_id> <feedback>`: Report an issue with a question
     `!top_10`: View the current leaderboard
     `!weekly_heroes`: View this week's top performers
@@ -544,25 +547,50 @@ async def report(ctx, question_id: int, *, feedback):
         await ctx.send("An error occurred while submitting your report. Please try again later.")
 
 @bot.command()
-async def topic(ctx, *, topic_name):
+async def topic(ctx, *, topic_name=None):
     user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
     username = str(ctx.author)
     await ensure_user_exists(user_id, username)
+
+    if topic_name is None:
+        await list_topics(ctx)
+        return
+
     try:
         async with bot.db.acquire() as conn:
-            question = await conn.fetchrow('''
-                SELECT * FROM questions
-                WHERE topic = $1
-                ORDER BY RANDOM() LIMIT 1
-            ''', topic_name)
+            topics = await conn.fetch("SELECT DISTINCT topic FROM questions WHERE topic IS NOT NULL")
+            topics = [t['topic'].lower() for t in topics]
 
-        if question:
-            await display_question(ctx, question)
-        else:
-            await ctx.send(f"No questions available for the topic '{topic_name}'.")
+            best_match = max(topics, key=lambda x: similar(x, topic_name.lower()))
+            if similar(best_match, topic_name.lower()) < 0.9:  # 90% accuracy
+                await ctx.send(f"No close match found for '{topic_name}'. Here are the available topics:")
+                await list_topics(ctx)
+                return
+
+            question = await get_question(topic=best_match, user_id=user_id)
+            if question:
+                await user_questions.set(user_id, question)
+                await display_question(ctx, question)
+            else:
+                await ctx.send(f"Sorry, no more questions available for the topic '{best_match.title()}' at the moment.")
     except Exception as e:
-        logging.error(f"Error in topic command: {e}")
-        await ctx.send("An error occurred while fetching the question. Please try again later.")
+        logging.error(f"Error in topic question command: {e}")
+        await ctx.send("An error occurred while fetching a question. Please try again later.")
+
+async def list_topics(ctx):
+    try:
+        async with bot.db.acquire() as conn:
+            topics = await conn.fetch("SELECT DISTINCT topic FROM questions WHERE topic IS NOT NULL ORDER BY topic")
+        
+        if topics:
+            topic_list = ", ".join([f"{t['topic']}" for t in topics])
+            await ctx.send(f"Available topics:\n{topic_list}\n\nUse `!topic <topic name>` to get a question from a specific topic.")
+        else:
+            await ctx.send("No topics available at the moment.")
+    except Exception as e:
+        logging.error(f"Error in list_topics: {e}")
+        await ctx.send("An error occurred while fetching the topic list. Please try again later.")
 
 @bot.command()
 async def hint(ctx):
@@ -983,120 +1011,21 @@ async def update_user_achievements(ctx, user_id):
         logging.error(f"Error in update_user_achievements: {e}")
         # Don't send an error message to the user for this internal error
 
-async def get_user_streak(user_id):
-    async with bot.db.acquire() as conn:
-        submissions = await conn.fetch('''
-            SELECT submitted_at::date, points
-            FROM user_submissions
-            WHERE user_id = $1
-            ORDER BY submitted_at DESC
-        ''', user_id)
-        
-        streak = 0
-        last_date = None
-        for submission in submissions:
-            if last_date is None:
-                last_date = submission['submitted_at']
-                if submission['points'] > 0:
-                    streak = 1
-            elif (last_date - submission['submitted_at']).days == 1:
-                if submission['points'] > 0:
-                    streak += 1
-                last_date = submission['submitted_at']
-            else:
-                break
-    return streak
-
 async def ensure_tables_exist():
     try:
         async with bot.db.acquire() as conn:
             await conn.execute('''
-                -- Create tables if they don't exist
-                CREATE TABLE IF NOT EXISTS questions (
-                    id SERIAL PRIMARY KEY,
-                    question TEXT NOT NULL,
-                    answer TEXT NOT NULL,
-                    difficulty VARCHAR(10) NOT NULL,
-                    topic VARCHAR(50),
-                    datasets TEXT,
-                    company VARCHAR(255)  -- Add this line
-                );
-
-                CREATE TABLE IF NOT EXISTS reports (
-                    id SERIAL PRIMARY KEY,
-                    reported_by BIGINT NOT NULL,
-                    question_id INTEGER,
-                    remarks TEXT NOT NULL,
-                    reported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-
-                CREATE TABLE IF NOT EXISTS leaderboard (
-                    user_id BIGINT PRIMARY KEY,
-                    points INTEGER DEFAULT 0
-                );
-
-                CREATE TABLE IF NOT EXISTS user_submissions (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT NOT NULL,
-                    question_id INTEGER,
-                    points INTEGER NOT NULL,
-                    submitted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                );
-
-                CREATE TABLE IF NOT EXISTS weekly_points (
-                    user_id BIGINT NOT NULL,
-                    points INTEGER DEFAULT 0,
-                    week_start DATE NOT NULL,
-                    PRIMARY KEY (user_id, week_start)
-                );
-
+                -- Create your tables here
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
-                    username TEXT
+                    username TEXT NOT NULL
                 );
-
-                CREATE TABLE IF NOT EXISTS user_challenges (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT NOT NULL,
-                    total_questions INTEGER NOT NULL,
-                    correct_answers INTEGER NOT NULL,
-                    time_taken FLOAT NOT NULL,
-                    completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-
-                CREATE TABLE IF NOT EXISTS user_preferences (
+                
+                -- Add other table creations as needed
+                
+                CREATE TABLE IF NOT EXISTS user_stats (
                     user_id BIGINT PRIMARY KEY,
-                    preferred_difficulty VARCHAR(10)
-                );
-
-                CREATE TABLE IF NOT EXISTS question_ratings (
-                    user_id BIGINT,
-                    question_id INTEGER,
-                    rating INTEGER CHECK (rating >= 1 AND rating <= 5),
-                    PRIMARY KEY (user_id, question_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS user_achievements (
-                    user_id BIGINT,
-                    achievement VARCHAR(50),
-                    earned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (user_id, achievement)
-                );
-
-                CREATE TABLE IF NOT EXISTS daily_points (
-                    user_id BIGINT,
-                    date DATE,
-                    points INT,
-                    PRIMARY KEY (user_id, date)
-                );
-
-                -- Add the submitted_questions table here
-                CREATE TABLE IF NOT EXISTS submitted_questions (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT NOT NULL,
-                    username TEXT NOT NULL,
-                    question TEXT NOT NULL,
-                    submitted_at TIMESTAMP WITH TIME ZONE NOT NULL
+                    streak INT DEFAULT 0
                 );
             ''')
         logging.info("All tables created successfully")
@@ -1105,21 +1034,23 @@ async def ensure_tables_exist():
         raise
 
 async def wait_for_db():
-    max_retries = 10
-    retry_interval = 5  # seconds
+    max_retries = 5
+    retry_delay = 5  # seconds
 
     for attempt in range(max_retries):
         try:
             await create_db_pool()
-            print("Successfully connected to the database")
+            await ensure_tables_exist()
+            logging.info("Database connection established and tables verified.")
             return
         except Exception as e:
-            print(f"Attempt {attempt + 1}/{max_retries}: Failed to connect to the database: {e}")
+            logging.error(f"Attempt {attempt + 1}/{max_retries} to connect to the database failed: {e}")
             if attempt < max_retries - 1:
-                print(f"Retrying in {retry_interval} seconds...")
-                await asyncio.sleep(retry_interval)
+                logging.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
             else:
-                raise Exception("Failed to connect to the database after multiple attempts")
+                logging.error("Max retries reached. Unable to connect to the database.")
+                raise
 
 async def graceful_shutdown():
     print("Shutting down gracefully...")
@@ -1192,18 +1123,28 @@ async def calculate_points(user_id, is_correct, difficulty):
     bonus = min(streak * 5, 50)  # 5 points per day, up to 50
     return base_points + bonus if is_correct else -20
 
-async def get_topic_question(ctx, topic):
+async def get_topic_question(ctx, topic_name):
     user_id = ctx.author.id
     await user_last_active.set(user_id, datetime.now(timezone.utc))
     username = str(ctx.author)
     await ensure_user_exists(user_id, username)
     try:
-        question = await get_question(topic=topic, user_id=user_id)
+        async with bot.db.acquire() as conn:
+            topics = await conn.fetch("SELECT DISTINCT topic FROM questions WHERE topic IS NOT NULL")
+            topics = [t['topic'].lower() for t in topics]
+
+        best_match = max(topics, key=lambda x: similar(x, topic_name.lower()))
+        if similar(best_match, topic_name.lower()) < 0.9:  # 90% accuracy
+            await ctx.send(f"No close match found for '{topic_name}'. Here are the available topics:")
+            await list_topics(ctx)
+            return
+
+        question = await get_question(topic=best_match, user_id=user_id)
         if question:
             await user_questions.set(user_id, question)
             await display_question(ctx, question)
         else:
-            await ctx.send(f"Sorry, no questions available for the topic '{topic}' at the moment.")
+            await ctx.send(f"Sorry, no questions available for the topic '{best_match.title()}' at the moment.")
     except Exception as e:
         logging.error(f"Error in topic question command: {e}")
         await ctx.send("An error occurred while fetching a question. Please try again later.")
@@ -1314,24 +1255,66 @@ async def cleanup_inactive_users():
     logging.info(f"Cleaned up inactive users. Active users: {len(user_questions._dict)}")
 
 @bot.command()
-async def company(ctx, *, company_name):
-    await get_company_question(ctx, company_name)
-
-async def get_company_question(ctx, company):
+async def company(ctx, *, company_name=None):
     user_id = ctx.author.id
     await user_last_active.set(user_id, datetime.now(timezone.utc))
     username = str(ctx.author)
     await ensure_user_exists(user_id, username)
+
+    if company_name is None:
+        await list_companies(ctx)
+        return
+
     try:
-        question = await get_question(company=company, user_id=user_id)
-        if question:
-            await user_questions.set(user_id, question)
-            await display_question(ctx, question)
-        else:
-            await ctx.send(f"Sorry, no questions available for the company '{company}' at the moment.")
+        async with bot.db.acquire() as conn:
+            # Get all companies
+            companies = await conn.fetch("SELECT DISTINCT company FROM questions WHERE company IS NOT NULL")
+            companies = [c['company'].lower() for c in companies]
+
+            # Find the best match
+            best_match = max(companies, key=lambda x: similar(x, company_name.lower()))
+            if similar(best_match, company_name.lower()) < 0.7:
+                await ctx.send(f"No close match found for '{company_name}'. Here are the available companies:")
+                await list_companies(ctx)
+                return
+
+            # Check if user has attempted all questions from this company
+            attempted = await conn.fetchval("""
+                SELECT COUNT(*) FROM user_submissions
+                JOIN questions ON user_submissions.question_id = questions.id
+                WHERE user_submissions.user_id = $1 AND LOWER(questions.company) = $2
+            """, user_id, best_match)
+
+            total = await conn.fetchval("SELECT COUNT(*) FROM questions WHERE LOWER(company) = $1", best_match)
+
+            if attempted == total:
+                await ctx.send(f"You've attempted all questions from {best_match.title()}. Try another company:")
+                await list_companies(ctx)
+                return
+
+            question = await get_question(company=best_match, user_id=user_id)
+            if question:
+                await user_questions.set(user_id, question)
+                await display_question(ctx, question)
+            else:
+                await ctx.send(f"Sorry, no more questions available for the company '{best_match.title()}' at the moment.")
     except Exception as e:
         logging.error(f"Error in company question command: {e}")
         await ctx.send("An error occurred while fetching a question. Please try again later.")
+
+async def list_companies(ctx):
+    try:
+        async with bot.db.acquire() as conn:
+            companies = await conn.fetch("SELECT DISTINCT company FROM questions WHERE company IS NOT NULL ORDER BY company")
+        
+        if companies:
+            company_list = ", ".join([f"{c['company']}" for c in companies])
+            await ctx.send(f"Available companies:\n{company_list}\n\nUse `!company <company name>` to get a question from a specific company.")
+        else:
+            await ctx.send("No companies available at the moment.")
+    except Exception as e:
+        logging.error(f"Error in list_companies: {e}")
+        await ctx.send("An error occurred while fetching the company list. Please try again later.")
 
 def check_answer(user_answer, correct_answer):
     # Implement your answer checking logic here
@@ -1340,7 +1323,48 @@ def check_answer(user_answer, correct_answer):
     feedback = "Your answer is correct!" if is_correct else "Your answer is incorrect. Please try again."
     return is_correct, feedback
 
-if __name__ == "__main__":
+async def get_user_streak(user_id):
+    try:
+        async with bot.db.acquire() as conn:
+            streak = await conn.fetchval('''
+                SELECT streak FROM user_stats WHERE user_id = $1
+            ''', user_id)
+        return streak or 0
+    except Exception as e:
+        logging.error(f"Error getting user streak: {e}")
+        return 0
+
+async def update_user_streak(user_id, is_correct):
+    try:
+        async with bot.db.acquire() as conn:
+            if is_correct:
+                await conn.execute('''
+                    INSERT INTO user_stats (user_id, streak)
+                    VALUES ($1, 1)
+                    ON CONFLICT (user_id)
+                    DO UPDATE SET streak = user_stats.streak + 1
+                ''', user_id)
+            else:
+                await conn.execute('''
+                    UPDATE user_stats SET streak = 0 WHERE user_id = $1
+                ''', user_id)
+    except Exception as e:
+        logging.error(f"Error updating user streak: {e}")
+
+user_locks = {}
+
+async def get_user_lock(user_id):
+    if user_id not in user_locks:
+        user_locks[user_id] = asyncio.Lock()
+    return user_locks[user_id]
+
+# Use the lock in critical sections, e.g.:
+async def update_user_data(user_id, data):
+    async with await get_user_lock(user_id):
+        # Update user data here
+        pass  # Replace this with actual update logic
+
+async def setup():
     required_vars = ['DATABASE_URL', 'DISCORD_TOKEN', 'CHANNEL_ID']
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     
@@ -1350,5 +1374,17 @@ if __name__ == "__main__":
             print(f"{var}: {os.getenv(var)}")
         raise ValueError("Missing required environment variables")
 
-    asyncio.run(wait_for_db())
-    bot.run(os.getenv('DISCORD_TOKEN'))
+    await wait_for_db()
+
+def main():
+    asyncio.run(setup())
+    try:
+        bot.run(os.getenv('DISCORD_TOKEN'))
+    except KeyboardInterrupt:
+        print("Bot stopped by user.")
+    finally:
+        if hasattr(bot, 'db'):
+            asyncio.run(bot.db.close())
+
+if __name__ == "__main__":
+    main()
