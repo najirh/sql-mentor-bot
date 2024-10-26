@@ -108,6 +108,20 @@ async def ensure_user_exists(user_id, username):
         logging.error(f"Error ensuring user exists: {e}")
         raise
 
+# Add the new get_user_stats function here
+async def get_user_stats(user_id):
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            stats = await conn.fetchrow('''
+                SELECT 
+                    COUNT(*) as total_answers,
+                    SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as correct_answers,
+                    SUM(points) as total_points
+                FROM user_submissions
+                WHERE user_id = $1
+            ''', user_id)
+    return stats
+
 async def get_question(difficulty=None, user_id=None, topic=None, company=None):
     try:
         logging.info(f"Fetching question for user_id: {user_id}, difficulty: {difficulty}, topic: {topic}, company: {company}")
@@ -295,20 +309,20 @@ async def process_answer(ctx, user_id, answer):
         return
 
     is_correct, feedback = check_answer(answer, question['answer'])
-    current_attempts = await user_attempts.get(user_id, 0)
-    max_attempts = 3
-
     points = await calculate_points(user_id, is_correct, question['difficulty'])
 
+    await update_user_submissions(user_id, question['id'], is_correct, points)
+    await update_weekly_points(user_id, points)
+    today = get_ist_time().date()
+    await update_daily_points(user_id, today, points)
+
     if is_correct:
-        await update_user_stats(user_id, points, is_correct)
-        await update_user_streak(user_id, True)
         await ctx.send(f"🎉 Correct! You've earned {points} points. {feedback}")
         await user_questions.pop(user_id, None)
         await user_attempts.pop(user_id, None)
     else:
-        await update_user_stats(user_id, points, is_correct)
-        await update_user_streak(user_id, False)
+        current_attempts = await user_attempts.get(user_id, 0)
+        max_attempts = 3
         if current_attempts < max_attempts - 1:
             await user_attempts.set(user_id, current_attempts + 1)
             attempts_left = max_attempts - current_attempts - 1
@@ -318,8 +332,6 @@ async def process_answer(ctx, user_id, answer):
             await user_questions.pop(user_id, None)
             await user_attempts.pop(user_id, None)
 
-    # Always update user submissions
-    await update_user_submissions(user_id, question['id'], is_correct, points)
     await update_user_achievements(ctx, user_id)
 
 @bot.command()
@@ -331,7 +343,7 @@ async def my_stats(ctx):
             stats = await conn.fetchrow('''
                 SELECT 
                     COUNT(*) as total_questions,
-                    SUM(CASE WHEN points > 0 THEN 1 ELSE 0 END) as correct_answers,
+                    SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as correct_answers,
                     AVG(points) as avg_points,
                     SUM(points) as total_points
                 FROM user_submissions
@@ -343,13 +355,352 @@ async def my_stats(ctx):
         await ctx.send(f"📊 Your SQL Journey Stats 📊\n\n"
                        f"🔢 Total Questions: {stats['total_questions']}\n"
                        f"✅ Correct Answers: {stats['correct_answers']}\n"
-                       f" Success Rate: {success_rate:.2f}%\n"
+                       f"📈 Success Rate: {success_rate:.2f}%\n"
                        f"⭐ Average Points: {stats['avg_points']:.2f}\n"
                        f"💰 Total Points: {stats['total_points']}\n\n"
                        f"🌟 Keep coding and climbing the ranks! 🚀\n"
                        f"Remember, every query makes you stronger! 💪")
     else:
-        await ctx.send(" Your SQL Adventure Awaits! 🚀\n\n"
+        await ctx.send("🚀 Your SQL Adventure Awaits! 🚀\n\n"
+                       "You haven't answered any questions yet. Let's change that!\n"
+                       "Use `!sql` to get your first question and start your journey.\n\n"
+                       "Remember, every SQL master started as a beginner. Your coding adventure begins now! 💪✨")
+
+@tasks.loop(time=time(hour=0, minute=0))  # Midnight IST
+async def reset_daily_points():
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                await conn.execute('''
+                    DELETE FROM daily_points
+                    WHERE date < CURRENT_DATE
+                ''')
+        logging.info("Daily points reset successfully")
+    except Exception as e:
+        logging.error(f"Error in reset_daily_points task: {e}")
+
+@bot.event
+async def on_ready():
+    print("Bot is ready.")
+    if not hasattr(bot, 'db'):
+        logging.error("Database connection not established. Shutting down.")
+        await bot.close()
+
+@bot.event
+async def on_error(event, *args, **kwargs):
+    logging.error(f"Unhandled error in {event}", exc_info=True)
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(f"This command is on cooldown. Try again in {error.retry_after:.2f} seconds.")
+    elif isinstance(error, commands.CommandNotFound):
+        await ctx.send("Unknown command. Use !help to see available commands.")
+    else:
+        logging.error(f"Unhandled command error: {error}", exc_info=True)
+        await ctx.send("An error occurred while processing the command. Please try again later.")
+
+@bot.event
+async def on_disconnect():
+    print("Bot disconnected from Discord")
+
+@bot.command(name='help')
+async def help(ctx):
+    help_text = """
+    Available commands:
+    `!sql`: Get a random SQL question based on your preference
+    `!easy`, `!medium`, `!hard`: Get a question of specific difficulty
+    `!topic`: List all available topics or get a question on a specific SQL topic
+    `!company`: List all available companies or practice questions from a specific company
+    `!submit <answer>`: Submit your answer to the current question
+    `!report <question_id> <feedback>`: Report an issue with a question
+    `!top_10`: View the current leaderboard
+    `!weekly_heroes`: View this week's top performers
+    `!my_stats`: Check your personal progress and achievements
+    `!set_preference <difficulty>`: Set your preferred question difficulty
+    `!reset_preference`: Reset your difficulty preference
+    `!submit_question <your question>`: Submit a new question for review
+
+    For more detailed help on each command, use `!help <command_name>`.
+    """
+    await ctx.send(help_text)
+
+@bot.command()
+async def easy(ctx):
+    await get_difficulty_question(ctx, 'easy')
+
+@bot.command()
+async def medium(ctx):
+    await get_difficulty_question(ctx, 'medium')
+
+@bot.command()
+async def hard(ctx):
+    await get_difficulty_question(ctx, 'hard')
+
+async def get_difficulty_question(ctx, difficulty):
+    user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))  # Add this line
+    username = str(ctx.author)
+    await ensure_user_exists(user_id, username)
+    try:
+        question = await get_question(difficulty, user_id)
+        if question:
+            await user_questions.set(user_id, question)
+            await display_question(ctx, question)
+        else:
+            await ctx.send(f"Sorry, no {difficulty} questions available at the moment.")
+    except Exception as e:
+        logging.error(f"Error in {difficulty} command: {e}")
+        await ctx.send("An error occurred while fetching a question. Please try again later.")
+
+@bot.command()
+async def question(ctx):
+    user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
+    username = str(ctx.author)
+    await ensure_user_exists(user_id, username)
+
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                preference = await conn.fetchval('''
+                    SELECT preferred_difficulty FROM user_preferences
+                    WHERE user_id = $1
+                ''', user_id)
+        
+        question = await get_question(difficulty=preference, user_id=user_id)
+        if question:
+            await user_questions.set(user_id, question)
+            await display_question(ctx, question)
+        else:
+            await ctx.send("Sorry, no questions available at the moment.")
+    except Exception as e:
+        logging.error(f"Error in question command: {e}")
+        await ctx.send("An error occurred while fetching a question. Please try again later.")
+
+@bot.command()
+async def try_again(ctx):
+    user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
+    current_attempts = await user_attempts.get(user_id, 0)
+    max_attempts = 3
+    if current_attempts < max_attempts:
+        question = await user_questions.get(user_id)
+        if question:
+            await display_question(ctx, question)
+        else:
+            await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
+    else:
+        await ctx.send("You've used all your attempts for this question. Use `!sql` to get a new question.")
+
+@bot.command()
+async def leaderboard(ctx):
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                top_users = await conn.fetch('''
+                    SELECT u.username, l.points 
+                    FROM leaderboard l
+                    JOIN users u ON l.user_id = u.user_id
+                    ORDER BY l.points DESC LIMIT 10
+                ''')
+        
+        if top_users:
+            headers = ["Rank", "User", "Points"]
+            data = [(i, user['username'], user['points']) for i, user in enumerate(top_users, 1)]
+            table = create_discord_table(headers, data)
+            await ctx.send(f"🏆 Top 10 Leaderboard 🏆\n{table}")
+        else:
+            await ctx.send("No users on the leaderboard yet. Start answering questions to climb the ranks!")
+    except Exception as e:
+        logging.error(f"Error in leaderboard command: {e}")
+        await ctx.send("An error occurred while fetching the leaderboard. Please try again later.")
+
+@bot.command()
+async def weekly_heroes(ctx):
+    await user_last_active.set(ctx.author.id, datetime.now(timezone.utc))  # Add this line
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                week_start = await get_week_start()
+                top_users = await conn.fetch('''
+                    SELECT u.user_id, u.username, COUNT(*) as submissions, SUM(us.points) as points
+                    FROM user_submissions us
+                    JOIN users u ON us.user_id = u.user_id
+                    WHERE us.submitted_at >= $1
+                    GROUP BY u.user_id, u.username
+                    ORDER BY submissions DESC, points DESC
+                    LIMIT 10
+                ''', week_start)
+        
+        if top_users:
+            headers = ["Rank", "User", "Submissions", "Points"]
+            data = []
+            for i, user in enumerate(top_users, 1):
+                data.append((i, user['username'], user['submissions'], user['points']))
+            table = create_discord_table(headers, data)
+            await ctx.send(f"🦸 Weekly Heroes \n{table}")
+        else:
+            await ctx.send("No submissions this week yet. Be the first hero!")
+    except Exception as e:
+        logging.error(f"Error in weekly_heroes command: {e}")
+        await ctx.send("An error occurred while fetching the weekly heroes. Please try again later.")
+
+@bot.command()
+async def report(ctx, question_id: int, *, feedback):
+    user_id = ctx.author.id
+    username = str(ctx.author)
+    await ensure_user_exists(user_id, username)
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                # Check if the question exists
+                question = await conn.fetchrow('SELECT * FROM questions WHERE id = $1', question_id)
+                if not question:
+                    await ctx.send(f"Question with ID {question_id} does not exist.")
+                    return
+
+                # Insert the report
+                await conn.execute('''
+                    INSERT INTO reports (reported_by, question_id, remarks)
+                    VALUES ($1, $2, $3)
+                ''', user_id, question_id, feedback)
+
+        await ctx.send(f"Thank you for your feedback. Your report for question {question_id} has been submitted and will be reviewed by our team.")
+    except Exception as e:
+        logging.error(f"Error in report command: {e}")
+        await ctx.send("An error occurred while submitting your report. Please try again later.")
+
+@bot.command()
+async def topic(ctx, *, topic_name=None):
+    user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
+    username = str(ctx.author)
+    await ensure_user_exists(user_id, username)
+
+    if topic_name is None:
+        await list_topics(ctx)
+        return
+
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                topics = await conn.fetch("SELECT DISTINCT topic FROM questions WHERE topic IS NOT NULL")
+                topics = [t['topic'].lower() for t in topics]
+
+                best_match = max(topics, key=lambda x: similar(x, topic_name.lower()))
+                if similar(best_match, topic_name.lower()) < 0.9:  # 90% accuracy
+                    await ctx.send(f"No close match found for '{topic_name}'. Here are the available topics:")
+                    await list_topics(ctx)
+                    return
+
+                question = await get_question(topic=best_match, user_id=user_id)
+                if question:
+                    await user_questions.set(user_id, question)
+                    await display_question(ctx, question)
+                else:
+                    await ctx.send(f"Sorry, no more questions available for the topic '{best_match.title()}' at the moment.")
+    except Exception as e:
+        logging.error(f"Error in topic question command: {e}")
+        await ctx.send("An error occurred while fetching a question. Please try again later.")
+
+async def list_topics(ctx):
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                topics = await conn.fetch("SELECT DISTINCT topic FROM questions WHERE topic IS NOT NULL ORDER BY topic")
+        
+        if topics:
+            topic_list = ", ".join([f"{t['topic']}" for t in topics])
+            await ctx.send(f"Available topics:\n{topic_list}\n\nUse `!topic <topic name>` to get a question from a specific topic.")
+        else:
+            await ctx.send("No topics available at the moment.")
+    except Exception as e:
+        logging.error(f"Error in list_topics: {e}")
+        await ctx.send("An error occurred while fetching the topic list. Please try again later.")
+
+@bot.command()
+async def hint(ctx):
+    user_id = ctx.author.id
+    question = await user_questions.get(user_id)
+    if question and question['hint']:
+        await ctx.send(f"💡 Hint: {question['hint']}\n"
+                       f"Use this wisdom wisely, young SQL padawan! 🧘‍♂️✨")
+    else:
+        await ctx.send("🤔 Hmm... No hint available for this question.\n"
+                       "Time to put on your thinking cap! 🧢💭")
+
+@bot.command()
+async def list_categories(ctx):
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                categories = await conn.fetch('''
+                    SELECT DISTINCT category FROM questions
+                    WHERE category IS NOT NULL
+                    ORDER BY category
+                ''')
+        
+        if categories:
+            category_list = ", ".join([f"📁 {cat['category']}" for cat in categories])
+            await ctx.send(f"🗂️ Available SQL Categories ️\n\n{category_list}\n\n"
+                           f"Choose your path and conquer the SQL realm! 🏆")
+        else:
+            await ctx.send("🕵️‍♂️ Hmm... It seems our category list is on vacation.\n"
+                           "Check back later for exciting SQL adventures! 🌴")
+    except Exception as e:
+        logging.error(f"Error in list_categories command: {e}")
+        await ctx.send("⚠️ Oops! Our category finder is taking a coffee break.\n"
+                       "Please try again later when it's caffeinated! ☕")
+
+@tasks.loop(time=time(hour=23, minute=30))  # 11:30 PM IST
+async def daily_question():
+    global current_question
+    try:
+        current_question = await get_question()
+        if current_question:
+            points = {'easy': 60, 'medium': 80, 'hard': 120}.get(current_question['difficulty'], 0)
+            for channel_id in CHANNEL_IDS:
+                channel = bot.get_channel(channel_id)
+                if channel:
+                    await channel.send(f"Question ID: {current_question['id']}")
+                    await channel.send(f"Daily SQL Question ({current_question['difficulty'].upper()}, worth {points} points):\n\n{current_question['question']}\n\nDataset:\n```\n{current_question['datasets']}\n```\n\nUse `!submit` followed by your SQL query to answer!\n\nIf you want to go to a previous question, use the `!question <id>` command with the desired question ID.")
+        else:
+            for channel_id in CHANNEL_IDS:
+                channel = bot.get_channel(channel_id)
+                if channel:
+                    await channel.send("Sorry, no questions available for today's daily question.")
+    except Exception as e:
+        logging.error(f"Error in daily_question task: {e}")
+
+@bot.command()
+@db_connection_required()
+async def my_stats(ctx):
+    user_id = ctx.author.id
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            stats = await conn.fetchrow('''
+                SELECT 
+                    COUNT(*) as total_questions,
+                    SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as correct_answers,
+                    AVG(points) as avg_points,
+                    SUM(points) as total_points
+                FROM user_submissions
+                WHERE user_id = $1
+            ''', user_id)
+    
+    if stats and stats['total_questions'] > 0:
+        success_rate = (stats['correct_answers'] / stats['total_questions']) * 100
+        await ctx.send(f"📊 Your SQL Journey Stats 📊\n\n"
+                       f"🔢 Total Questions: {stats['total_questions']}\n"
+                       f"✅ Correct Answers: {stats['correct_answers']}\n"
+                       f"📈 Success Rate: {success_rate:.2f}%\n"
+                       f"⭐ Average Points: {stats['avg_points']:.2f}\n"
+                       f"💰 Total Points: {stats['total_points']}\n\n"
+                       f"🌟 Keep coding and climbing the ranks! 🚀\n"
+                       f"Remember, every query makes you stronger! 💪")
+    else:
+        await ctx.send("🚀 Your SQL Adventure Awaits! 🚀\n\n"
                        "You haven't answered any questions yet. Let's change that!\n"
                        "Use `!sql` to get your first question and start your journey.\n\n"
                        "Remember, every SQL master started as a beginner. Your coding adventure begins now! 💪✨")
@@ -1158,7 +1509,7 @@ async def calculate_points(user_id, is_correct, difficulty):
         streak_bonus = min(streak * 5, 50)  # Cap streak bonus at 50 points
         return base_points + streak_bonus
     else:
-        return -10  # Deduct 10 points for incorrect answers
+        return -20  # Deduct 20 points for incorrect answers
 
 async def get_topic_question(ctx, topic_name):
     user_id = ctx.author.id
@@ -1269,6 +1620,40 @@ async def weekly_progress(ctx):
     await ctx.send(f"🗓️ Your Weekly Progress 🗓️\n"
                    f"Points earned this week: {weekly_points}\n"
                    f"You're making great strides! 🚀")
+
+@bot.command()
+@db_connection_required()
+async def my_stats(ctx):
+    user_id = ctx.author.id
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            stats = await conn.fetchrow('''
+                SELECT 
+                    COUNT(*) as total_questions,
+                    SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as correct_answers,
+                    AVG(points) as avg_points,
+                    SUM(points) as total_points
+                FROM user_submissions
+                WHERE user_id = $1
+            ''', user_id)
+    
+    if stats and stats['total_questions'] > 0:
+        success_rate = (stats['correct_answers'] / stats['total_questions']) * 100
+        await ctx.send(f"📊 Your SQL Journey Stats 📊\n\n"
+                       f"🔢 Total Questions: {stats['total_questions']}\n"
+                       f"✅ Correct Answers: {stats['correct_answers']}\n"
+                       f"📈 Success Rate: {success_rate:.2f}%\n"
+                       f"⭐ Average Points: {stats['avg_points']:.2f}\n"
+                       f"💰 Total Points: {stats['total_points']}\n\n"
+                       f"🌟 Keep coding and climbing the ranks! 🚀\n"
+                       f"Remember, every query makes you stronger! 💪")
+    else:
+        await ctx.send("🚀 Your SQL Adventure Awaits! 🚀\n\n"
+                       "You haven't answered any questions yet. Let's change that!\n"
+                       "Use `!sql` to get your first question and start your journey.\n\n"
+                       "Remember, every SQL master started as a beginner. Your coding adventure begins now! 💪✨")
+
+
 
 @tasks.loop(minutes=30)
 async def cleanup_inactive_users():
