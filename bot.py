@@ -296,27 +296,31 @@ async def process_answer(ctx, user_id, answer):
 
     is_correct, feedback = check_answer(answer, question['answer'])
     current_attempts = await user_attempts.get(user_id, 0)
-    max_attempts = 3  # Set this to your desired max attempts
+    max_attempts = 3
 
-    points = 0  # Initialize points to 0
+    points = await calculate_points(user_id, is_correct, question['difficulty'])
 
     if is_correct:
-        points = await calculate_points(user_id, is_correct, question['difficulty'])
         await update_user_stats(user_id, points, is_correct)
-        await ctx.send(f"Correct! You've earned {points} points.")
+        await update_user_streak(user_id, True)
+        await ctx.send(f"🎉 Correct! You've earned {points} points. {feedback}")
         await user_questions.pop(user_id, None)
         await user_attempts.pop(user_id, None)
     else:
+        await update_user_stats(user_id, points, is_correct)
+        await update_user_streak(user_id, False)
         if current_attempts < max_attempts - 1:
             await user_attempts.set(user_id, current_attempts + 1)
-            await ctx.send(f"Sorry, that's not correct. {feedback}\nYou have {max_attempts - current_attempts - 1} attempts left. Use `!submit` to try again.")
+            attempts_left = max_attempts - current_attempts - 1
+            await ctx.send(f"❌ Sorry, that's not correct. {feedback}\nYou have {attempts_left} {'attempt' if attempts_left == 1 else 'attempts'} left. Use `!try_again` to give it another shot!")
         else:
-            await ctx.send(f"Sorry, that's not correct. You've used all your attempts for this question. Use `!sql` to get a new question.")
+            await ctx.send(f"❌ Sorry, that's not correct. {feedback}\nUse `!sql` to get a new question.")
             await user_questions.pop(user_id, None)
             await user_attempts.pop(user_id, None)
 
-    # Always update user submissions, with 0 points for incorrect answers
+    # Always update user submissions
     await update_user_submissions(user_id, question['id'], is_correct, points)
+    await update_user_achievements(ctx, user_id)
 
 @bot.command()
 @db_connection_required()
@@ -467,10 +471,15 @@ async def try_again(ctx):
     user_id = ctx.author.id
     await user_last_active.set(user_id, datetime.now(timezone.utc))
     current_attempts = await user_attempts.get(user_id, 0)
-    if current_attempts == 1:
-        await ctx.send("You can try again. Please submit your new answer using the `!submit` command.")
+    max_attempts = 3
+    if current_attempts < max_attempts:
+        question = await user_questions.get(user_id)
+        if question:
+            await display_question(ctx, question)
+        else:
+            await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
     else:
-        await ctx.send("You don't have any attempts left or there's no active question for you.")
+        await ctx.send("You've used all your attempts for this question. Use `!sql` to get a new question.")
 
 @bot.command()
 async def leaderboard(ctx):
@@ -1144,9 +1153,12 @@ async def daily_task_error(error):
 
 async def calculate_points(user_id, is_correct, difficulty):
     base_points = {'easy': 60, 'medium': 80, 'hard': 120}.get(difficulty, 0)
-    streak = await get_user_streak(user_id)
-    bonus = min(streak * 5, 50)  # 5 points per day, up to 50
-    return base_points + bonus if is_correct else -20
+    if is_correct:
+        streak = await get_user_streak(user_id)
+        streak_bonus = min(streak * 5, 50)  # Cap streak bonus at 50 points
+        return base_points + streak_bonus
+    else:
+        return -10  # Deduct 10 points for incorrect answers
 
 async def get_topic_question(ctx, topic_name):
     user_id = ctx.author.id
@@ -1352,33 +1364,26 @@ def check_answer(user_answer, correct_answer):
     correct_sql = sqlparse.format(correct_answer.strip().lower(), reindent=True, keyword_case='upper')
 
     # Compare the parsed SQL structures
-    user_parsed = sqlparse.parse(user_sql)[0]
-    correct_parsed = sqlparse.parse(correct_sql)[0]
+    user_parsed = sqlparse.parse(user_sql)
+    correct_parsed = sqlparse.parse(correct_sql)
 
-    # Check for exact match first
-    if user_sql == correct_sql:
-        return True, "Your answer is correct!"
-
-    # Compare the structures
+    # Calculate similarity
     structure_similarity = compare_sql_structures(user_parsed, correct_parsed)
-
-    # Use SequenceMatcher for string similarity
     string_similarity = SequenceMatcher(None, user_sql, correct_sql).ratio()
-
-    # Calculate overall similarity
     overall_similarity = (structure_similarity + string_similarity) / 2
 
-    if overall_similarity >= 0.65:
-        return True, "Your answer is correct!"
-    else:
-        return False, f"Your answer is incorrect. Similarity: {overall_similarity:.2f}. Please try again."
+    is_correct = overall_similarity >= 0.65
+    feedback = f"Similarity: {overall_similarity:.2%}"
+    return is_correct, feedback
 
 def compare_sql_structures(user_parsed, correct_parsed):
-    # This is a simplified comparison. You might want to expand this for more complex queries.
-    user_tokens = [token.normalized for token in user_parsed.flatten() if not token.is_whitespace]
-    correct_tokens = [token.normalized for token in correct_parsed.flatten() if not token.is_whitespace]
+    def get_tokens(parsed):
+        return [token for stmt in parsed for token in stmt.flatten() if not token.is_whitespace]
 
-    common_tokens = set(user_tokens) & set(correct_tokens)
+    user_tokens = get_tokens(user_parsed)
+    correct_tokens = get_tokens(correct_parsed)
+
+    common_tokens = set(token.normalized for token in user_tokens) & set(token.normalized for token in correct_tokens)
     return len(common_tokens) / max(len(user_tokens), len(correct_tokens))
 
 async def get_user_streak(user_id):
