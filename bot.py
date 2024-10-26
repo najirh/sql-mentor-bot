@@ -472,30 +472,30 @@ async def try_again(ctx):
     else:
         await ctx.send("You've used all your attempts for this question. Use `!sql` to get a new question.")
 
-@bot.command()
-async def report(ctx, question_id: int, *, feedback):
-    user_id = ctx.author.id
-    username = str(ctx.author)
-    await ensure_user_exists(user_id, username)
-    try:
-        async with DB_SEMAPHORE:
-            async with bot.db.acquire() as conn:
-                # Check if the question exists
-                question = await conn.fetchrow('SELECT * FROM questions WHERE id = $1', question_id)
-                if not question:
-                    await ctx.send(f"Question with ID {question_id} does not exist.")
-                    return
+# @bot.command()
+# async def report(ctx, question_id: int, *, feedback):
+#     user_id = ctx.author.id
+#     username = str(ctx.author)
+#     await ensure_user_exists(user_id, username)
+#     try:
+#         async with DB_SEMAPHORE:
+#             async with bot.db.acquire() as conn:
+#                 # Check if the question exists
+#                 question = await conn.fetchrow('SELECT * FROM questions WHERE id = $1', question_id)
+#                 if not question:
+#                     await ctx.send(f"Question with ID {question_id} does not exist.")
+#                     return
 
-                # Insert the report
-                await conn.execute('''
-                    INSERT INTO reports (reported_by, question_id, remarks)
-                    VALUES ($1, $2, $3)
-                ''', user_id, question_id, feedback)
+#                 # Insert the report
+#                 await conn.execute('''
+#                     INSERT INTO reports (reported_by, question_id, remarks)
+#                     VALUES ($1, $2, $3)
+#                 ''', user_id, question_id, feedback)
 
-        await ctx.send(f"Thank you for your feedback. Your report for question {question_id} has been submitted and will be reviewed by our team.")
-    except Exception as e:
-        logging.error(f"Error in report command: {e}")
-        await ctx.send("An error occurred while submitting your report. Please try again later.")
+#         await ctx.send(f"Thank you for your feedback. Your report for question {question_id} has been submitted and will be reviewed by our team.")
+#     except Exception as e:
+#         logging.error(f"Error in report command: {e}")
+#         await ctx.send("An error occurred while submitting your report. Please try again later.")
 
 @bot.command()
 async def topic(ctx, *, topic_name=None):
