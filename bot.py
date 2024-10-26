@@ -427,7 +427,6 @@ async def help(ctx):
     `!topic`: List all available topics or get a question on a specific SQL topic
     `!company`: List all available companies or practice questions from a specific company
     `!submit <answer>`: Submit your answer to the current question
-    `!weekly_heroes`: View this week's top performers
     `!my_stats`: Check your personal progress and achievements
     `!set_preference <difficulty>`: Set your preferred question difficulty
     `!reset_preference`: Reset your difficulty preference
