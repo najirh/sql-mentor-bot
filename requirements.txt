@@ -10,3 +10,4 @@ requests==2.31.0
 aiodns==3.0.0  # For faster DNS resolution
 uvloop==0.17.0  # For faster event loop (not available on Windows)
 pytz==2023.3  # Add this line for timezone handling
+sqlparse==0.4.4
