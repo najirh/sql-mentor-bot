@@ -226,7 +226,7 @@ async def sql_error(ctx, error):
         await ctx.send(f"Whoa there, eager learner! You can try another question in {error.retry_after:.2f} seconds. Take a moment to review your last query or check out your stats with `!my_stats`.")
     else:
         logging.error(f"Unhandled error in sql command: {error}")
-        await ctx.send("An unexpected error occurred. Please try again later.")
+        # No need to send an error message to the user here
 
 @bot.command()
 async def submit(ctx, *, answer):
