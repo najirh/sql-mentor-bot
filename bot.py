@@ -206,6 +206,14 @@ async def get_daily_submissions(user_id, date):
         logging.error(f"Error getting daily submissions: {e}")
         return 0
 
+def db_connection_required():
+    async def predicate(ctx):
+        if not hasattr(bot, 'db'):
+            await ctx.send("Database connection not available. Please try again later.")
+            return False
+        return True
+    return commands.check(predicate)
+
 @bot.command(name='sql')
 @commands.cooldown(1, 60, commands.BucketType.user)
 async def sql(ctx):
@@ -310,6 +318,7 @@ async def process_answer(ctx, user_id, answer):
         logging.error(f"Error updating user submissions: {e}")
 
 @bot.command()
+@db_connection_required()
 async def my_stats(ctx):
     user_id = ctx.author.id
     async with bot.db.acquire() as conn:
@@ -353,21 +362,9 @@ async def reset_daily_points():
 
 @bot.event
 async def on_ready():
-    print(f'{bot.user} has connected to Discord!')
-    try:
-        await wait_for_db()
-        await ensure_tables_exist()
-        
-        daily_task.start()
-        daily_challenge.start()
-        update_leaderboard.start()
-        challenge_time_over.start()
-        cleanup_inactive_users.start()
-        
-        # Schedule the personal message
-        bot.loop.create_task(send_personal_message_to_all())
-    except Exception as e:
-        logging.error(f"Error during startup: {e}", exc_info=True)
+    print("Bot is ready.")
+    if not hasattr(bot, 'db'):
+        logging.error("Database connection not established. Shutting down.")
         await bot.close()
 
 @bot.event
@@ -545,28 +542,6 @@ async def report(ctx, question_id: int, *, feedback):
     except Exception as e:
         logging.error(f"Error in report command: {e}")
         await ctx.send("An error occurred while submitting your report. Please try again later.")
-
-@bot.command()
-async def skip(ctx):
-    user_id = ctx.author.id
-    await user_last_active.set(user_id, datetime.now(timezone.utc))
-
-    question = await user_questions.get(user_id)
-    if not question:
-        await ctx.send("There's no active question. Use `!sql` to get a question first.")
-        return
-
-    try:
-        new_question = await get_question(user_id=user_id)
-        if new_question:
-            await user_questions.set(user_id, new_question)
-            await display_question(ctx, new_question)
-            await ctx.send("Question skipped. Here's a new question for you.")
-        else:
-            await ctx.send("Sorry, no more questions available at the moment.")
-    except Exception as e:
-        logging.error(f"Error in skip command: {e}")
-        await ctx.send("An error occurred while fetching a new question. Please try again later.")
 
 @bot.command()
 async def topic(ctx, *, topic_name):
@@ -857,7 +832,7 @@ async def sql_battle(ctx):
     await user_last_active.set(ctx.author.id, datetime.now(timezone.utc))
     await ctx.send("SQL Battle is starting! React with 👍 to join. The battle will begin in 30 seconds.")
     message = await ctx.send("Waiting for players...")
-    await message.add_reaction("����")
+    await message.add_reaction("👍")
 
     await asyncio.sleep(30)
 
@@ -1338,52 +1313,6 @@ async def cleanup_inactive_users():
     
     logging.info(f"Cleaned up inactive users. Active users: {len(user_questions._dict)}")
 
-async def send_personal_message(user):
-    personal_message = (
-        "🎉 Exciting News! 🎉\n\n"
-        "Hello SQL enthusiast!\n\n"
-        "We're thrilled to introduce you to our SQL Mentor Bot (Beta v1), developed by the Zero Analyst Team.\n\n"
-        "This bot is designed to help you learn and practice SQL in a fun, interactive way. Here's how you can get started:\n\n"
-        "1. 📝 Get a question: Type `!sql` to receive a random SQL question.\n"
-        "2. 🔍 Submit your answer: Use `!submit` followed by your SQL query.\n"
-        "3. 📊 Track your progress: Check `!daily_progress` or `!weekly_progress`.\n"
-        "4. 📈 View your stats: Use `!my_stats` to see your overall performance.\n"
-        "5. 🏆 Compete with others: Check the `!leaderboard` to see top performers.\n"
-        "6. 💪 Challenge yourself: Try `!sql_battle` to compete in real-time.\n"
-        "7. 🎯 Customize your experience: Use `!set_preference` to choose your difficulty level.\n\n"
-        "We're excited to have you on board! If you have any questions or feedback, feel free to reach out.\n\n"
-        "Happy querying! "
-    )
-    try:
-        await user.send(personal_message)
-        logging.info(f"Sent personal message to user {user.id}")
-    except discord.errors.Forbidden:
-        logging.warning(f"Unable to send personal message to user {user.id}. DMs might be closed.")
-
-async def send_personal_message_to_all():
-    ist = pytz.timezone('Asia/Kolkata')
-    target_time = datetime.now(ist).replace(hour=22, minute=0, second=0, microsecond=0)
-    
-    while datetime.now(ist) < target_time:
-        await asyncio.sleep(60)  # Check every minute
-    
-    logging.info("Sending personal messages to all users")
-    sent_count = 0
-    failed_count = 0
-    
-    for guild in bot.guilds:
-        for member in guild.members:
-            if not member.bot:
-                try:
-                    await send_personal_message(member)
-                    sent_count += 1
-                    await asyncio.sleep(1)  # Add a small delay to avoid rate limiting
-                except Exception as e:
-                    logging.error(f"Failed to send personal message to {member.id}: {e}")
-                    failed_count += 1
-    
-    logging.info(f"Personal message sent to {sent_count} users. Failed for {failed_count} users.")
-
 @bot.command()
 async def company(ctx, *, company_name):
     await get_company_question(ctx, company_name)
@@ -1404,22 +1333,6 @@ async def get_company_question(ctx, company):
         logging.error(f"Error in company question command: {e}")
         await ctx.send("An error occurred while fetching a question. Please try again later.")
 
-@bot.command()
-@commands.is_owner()
-async def hide_command(ctx, command_name: str):
-    command = bot.get_command(command_name)
-    if command:
-        command.hidden = True
-        await ctx.send(f"Command '{command_name}' has been hidden from the help menu.")
-    else:
-        await ctx.send(f"Command '{command_name}' not found.")
-
-@bot.event
-async def on_ready():
-    message = await bot.get_channel(CHANNEL_IDS[0]).send("Initializing...")
-    await hide_command(await bot.get_context(message), "skip")
-    await message.delete()
-
 def check_answer(user_answer, correct_answer):
     # Implement your answer checking logic here
     # This is a simple example, you might want to make it more sophisticated
@@ -1436,4 +1349,6 @@ if __name__ == "__main__":
         for var in required_vars:
             print(f"{var}: {os.getenv(var)}")
         raise ValueError("Missing required environment variables")
+
+    asyncio.run(wait_for_db())
     bot.run(os.getenv('DISCORD_TOKEN'))
