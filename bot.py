@@ -53,6 +53,9 @@ CHANNEL_IDS = [int(id.strip()) for id in os.getenv('CHANNEL_ID', '').split(',') 
 
 DB_SEMAPHORE = asyncio.Semaphore(10)  # Increase from 5 to 10 or higher if needed
 
+# Add these near the top of your file, with other global variables
+user_timers = {}
+
 def similar(a, b):
     return SequenceMatcher(None, a, b).ratio()
 
@@ -128,9 +131,7 @@ async def get_question(difficulty=None, user_id=None, topic=None, company=None):
                 query = '''
                     SELECT q.* FROM questions q
                     LEFT JOIN user_submissions us ON q.id = us.question_id AND us.user_id = $1
-                    LEFT JOIN reports r ON q.id = r.question_id
-                    WHERE (us.question_id IS NULL OR us.points <= 0)
-                    AND r.question_id IS NULL
+                    WHERE (us.question_id IS NULL OR us.is_correct = FALSE)
                     AND ($2::VARCHAR IS NULL OR q.difficulty = $2::VARCHAR)
                     AND ($3::VARCHAR IS NULL OR q.topic = $3::VARCHAR)
                     AND ($4::VARCHAR IS NULL OR q.company = $4::VARCHAR)
@@ -209,9 +210,15 @@ async def update_daily_points(user_id, date, points):
 async def display_question(ctx, question):
     difficulty = question['difficulty'].capitalize()
     points = {'easy': 60, 'medium': 80, 'hard': 120}.get(question['difficulty'], 0)
+    time_limit = {'easy': 10, 'medium': 15, 'hard': 25}.get(question['difficulty'], 10)
+    
+    user_id = ctx.author.id
+    max_attempts = await get_max_attempts(user_id, question['id'])
     
     message = f"Question ID: {question['id']}\n"
     message += f"Difficulty: {difficulty} ({points} points)\n"
+    message += f"Time Limit: {time_limit} minutes ⏳\n"
+    message += f"Attempts Remaining: {max_attempts}\n"
     if question.get('topic'):
         message += f"Topic: {question['topic']}\n"
     if question.get('company'):
@@ -220,8 +227,14 @@ async def display_question(ctx, question):
     if question['datasets']:
         message += f"\nDataset:\n```\n{question['datasets']}\n```"
     message += "\nUse `!submit` followed by your SQL query to answer!"
+    message += "\nUse `!skip` if you want to try a different question."
     
     await ctx.send(message)
+    
+    # Start the timer
+    if user_id in user_timers:
+        user_timers[user_id].cancel()
+    user_timers[user_id] = asyncio.create_task(question_timer(ctx, question['id'], time_limit))
 
 async def check_daily_limit(ctx, user_id):
     today = get_ist_time().date()
@@ -273,6 +286,7 @@ async def sql(ctx):
         question = await get_question(difficulty=preference, user_id=user_id)
         if question:
             await user_questions.set(user_id, question)
+            await user_attempts.set(user_id, 0)
             await display_question(ctx, question)
         else:
             await ctx.send("Sorry, no questions available at your preferred difficulty. Try `!reset_preference` to see questions from all difficulties, or use `!topic <topic>` to try a specific topic.")
@@ -308,26 +322,28 @@ async def process_answer(ctx, user_id, answer):
 
     is_correct, feedback = check_answer(answer, question['answer'])
     points = await calculate_points(user_id, is_correct, question['difficulty'])
-
-    await update_user_stats(user_id, question['id'], is_correct, points)
-
+    
+    await update_all_scores(user_id, question['id'], is_correct, points)
+    
     if is_correct:
-        await ctx.send(f"🎉 Correct! You've earned {points} points. {feedback}")
+        await ctx.send(f"🎉 Correct! You've earned {points} points. {feedback}\n\n"
+                       f"📊 Track your progress with these commands:\n"
+                       f"• `!daily_progress` - See your progress for today\n"
+                       f"• `!weekly_progress` - Check your weekly progress\n"
+                       f"• `!my_achievements` - View your achievements\n"
+                       f"• `!leaderboard` - See the top performers")
         await user_questions.pop(user_id, None)
         await user_attempts.pop(user_id, None)
     else:
+        max_attempts = await get_max_attempts(user_id, question['id'])
         current_attempts = await user_attempts.get(user_id, 0)
-        max_attempts = 3
         if current_attempts < max_attempts - 1:
             await user_attempts.set(user_id, current_attempts + 1)
-            attempts_left = max_attempts - current_attempts - 1
-            await ctx.send(f"❌ Sorry, that's not correct. {feedback}\nYou have {attempts_left} {'attempt' if attempts_left == 1 else 'attempts'} left. Use `!try_again` to give it another shot!")
+            await ctx.send(f"❌ Incorrect. {points} points deducted. {feedback}\nYou have {max_attempts - current_attempts - 1} attempts left. Use `!try_again` to attempt this question again.")
         else:
-            await ctx.send(f"❌ Sorry, that's not correct. {feedback}\nUse `!sql` to get a new question.")
+            await ctx.send(f"❌ Incorrect. {points} points deducted. You've used all your attempts for this question. The correct answer was:\n```sql\n{question['answer']}\n```")
             await user_questions.pop(user_id, None)
             await user_attempts.pop(user_id, None)
-
-    await update_user_achievements(ctx, user_id)
 
 @bot.command()
 @db_connection_required()
@@ -345,7 +361,7 @@ async def my_stats(ctx):
                        f"🌟 Keep coding and climbing the ranks! 🚀\n"
                        f"Remember, every query makes you stronger! 💪")
     else:
-        await ctx.send("🚀 Your SQL Adventure Awaits! 🚀\n\n"
+        await ctx.send(" Your SQL Adventure Awaits! 🚀\n\n"
                        "You haven't answered any questions yet. Let's change that!\n"
                        "Use `!sql` to get your first question and start your journey.\n\n"
                        "Remember, every SQL master started as a beginner. Your coding adventure begins now! 💪✨")
@@ -365,10 +381,11 @@ async def reset_daily_points():
 
 @bot.event
 async def on_ready():
-    print("Bot is ready.")
-    if not hasattr(bot, 'db'):
-        logging.error("Database connection not established. Shutting down.")
-        await bot.close()
+    update_leaderboard.start()
+    update_weekly_heroes.start()
+    daily_challenge.start()
+    challenge_time_over.start()
+    logging.info(f'{bot.user} has connected to Discord!')
 
 @bot.event
 async def on_error(event, *args, **kwargs):
@@ -423,16 +440,17 @@ async def hard(ctx):
 
 async def get_difficulty_question(ctx, difficulty):
     user_id = ctx.author.id
-    await user_last_active.set(user_id, datetime.now(timezone.utc))  # Add this line
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
     username = str(ctx.author)
     await ensure_user_exists(user_id, username)
     try:
-        question = await get_question(difficulty, user_id)
+        question = await get_question(difficulty=difficulty, user_id=user_id)
         if question:
             await user_questions.set(user_id, question)
+            await user_attempts.set(user_id, 0)
             await display_question(ctx, question)
         else:
-            await ctx.send(f"Sorry, no {difficulty} questions available at the moment.")
+            await ctx.send(f"Sorry, no new {difficulty} questions available at the moment.")
     except Exception as e:
         logging.error(f"Error in {difficulty} command: {e}")
         await ctx.send("An error occurred while fetching a question. Please try again later.")
@@ -455,9 +473,10 @@ async def question(ctx):
         question = await get_question(difficulty=preference, user_id=user_id)
         if question:
             await user_questions.set(user_id, question)
+            await user_attempts.set(user_id, 0)
             await display_question(ctx, question)
         else:
-            await ctx.send("Sorry, no questions available at the moment.")
+            await ctx.send("Sorry, no new questions available at your preferred difficulty. Try `!reset_preference` to see questions from all difficulties, or use `!topic <topic>` to try a specific topic.")
     except Exception as e:
         logging.error(f"Error in question command: {e}")
         await ctx.send("An error occurred while fetching a question. Please try again later.")
@@ -466,14 +485,15 @@ async def question(ctx):
 async def try_again(ctx):
     user_id = ctx.author.id
     await user_last_active.set(user_id, datetime.now(timezone.utc))
+    question = await user_questions.get(user_id)
+    if not question:
+        await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
+        return
+
+    max_attempts = await get_max_attempts(user_id, question['id'])
     current_attempts = await user_attempts.get(user_id, 0)
-    max_attempts = 3
     if current_attempts < max_attempts:
-        question = await user_questions.get(user_id)
-        if question:
-            await display_question(ctx, question)
-        else:
-            await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
+        await display_question(ctx, question)
     else:
         await ctx.send("You've used all your attempts for this question. Use `!sql` to get a new question.")
 
@@ -528,6 +548,7 @@ async def topic(ctx, *, topic_name=None):
                 question = await get_question(topic=best_match, user_id=user_id)
                 if question:
                     await user_questions.set(user_id, question)
+                    await user_attempts.set(user_id, 0)
                     await display_question(ctx, question)
                 else:
                     await ctx.send(f"Sorry, no more questions available for the topic '{best_match.title()}' at the moment.")
@@ -550,26 +571,22 @@ async def list_topics(ctx):
         logging.error(f"Error in list_topics: {e}")
         await ctx.send("An error occurred while fetching the topic list. Please try again later.")
 
-@tasks.loop(time=time(hour=3, minute=30))  # 3:30 AM IST (10 PM UTC)
+@tasks.loop(minutes=15)  # Run every 15 minutes
 async def update_leaderboard():
     try:
-        async with DB_SEMAPHORE:
-            async with bot.db.acquire() as conn:
-                top_users = await conn.fetch('''
-                    SELECT u.username, l.points 
-                    FROM leaderboard l
-                    JOIN users u ON l.user_id = u.user_id
-                    ORDER BY l.points DESC LIMIT 10
-                ''')
-        
-        if top_users:
-            headers = ["Rank", "User", "Points"]
-            data = [(i, user['username'], user['points']) for i, user in enumerate(top_users, 1)]
-            table = create_discord_table(headers, data)
+        top_10 = await get_top_10()
+
+        if top_10:
+            top_10_message = "🌟 Daily All-Time Top 10 🌟\n\n"
+            for i, user in enumerate(top_10, 1):
+                emoji = ["🥇", "🥈", "🥉"] + ["🏅"]*7
+                top_10_message += f"{emoji[i-1]} {user['username']}: {user['total_points']} points\n"
+
             for channel_id in CHANNEL_IDS:
                 channel = bot.get_channel(channel_id)
                 if channel:
-                    await channel.send(f"🏆 Daily Top 10 Leaderboard 🏆\n{table}")
+                    await channel.send(top_10_message)
+
     except Exception as e:
         logging.error(f"Error in update_leaderboard task: {e}")
 
@@ -580,11 +597,15 @@ async def update_leaderboard_error(error):
 @tasks.loop(time=time(hour=17, minute=30))  # 5:30 PM IST
 async def daily_challenge():
     try:
-        question = await get_question()
+        # Get a fresh question that hasn't been used in a challenge before
+        question = await get_fresh_challenge_question()
         if question:
+            challenge_points = {'easy': 120, 'medium': 160, 'hard': 240}.get(question['difficulty'], 150)
             challenge_message = (
                 "🌟 Daily SQL Challenge 🌟\n\n"
-                f"Here's today's challenge (worth 150 points):\n\n"
+                f"Here's today's challenge (worth {challenge_points} points):\n\n"
+                f"Question ID: {question['id']}\n"
+                f"Difficulty: {question['difficulty'].capitalize()}\n"
                 f"{question['question']}\n\n"
                 f"Dataset:\n```\n{question['datasets']}\n```\n\n"
                 "⏳ You have 4 hours to submit your answer!\n"
@@ -594,24 +615,112 @@ async def daily_challenge():
                 channel = bot.get_channel(channel_id)
                 if channel:
                     await channel.send(challenge_message)
+            
+            # Store the current challenge question
+            await set_current_challenge(question['id'])
+        else:
+            logging.warning("No fresh questions available for the daily challenge.")
     except Exception as e:
         logging.error(f"Error in daily_challenge task: {e}")
+
+async def get_fresh_challenge_question():
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                question = await conn.fetchrow('''
+                    SELECT q.* FROM questions q
+                    LEFT JOIN challenge_history ch ON q.id = ch.question_id
+                    WHERE ch.question_id IS NULL
+                    ORDER BY RANDOM()
+                    LIMIT 1
+                ''')
+                if question:
+                    await conn.execute('''
+                        INSERT INTO challenge_history (question_id, challenge_date)
+                        VALUES ($1, $2)
+                    ''', question['id'], get_ist_time().date())
+        return question
+    except Exception as e:
+        logging.error(f"Error getting fresh challenge question: {e}")
+        return None
+
+async def set_current_challenge(question_id):
+    await bot.db.execute('''
+        INSERT INTO current_challenge (question_id, start_time)
+        VALUES ($1, $2)
+        ON CONFLICT (id) DO UPDATE SET question_id = $1, start_time = $2
+    ''', question_id, get_ist_time())
+
+@bot.command()
+async def submit_challenge(ctx, *, answer):
+    user_id = ctx.author.id
+    current_challenge = await get_current_challenge()
+    if not current_challenge:
+        await ctx.send("There is no active challenge right now.")
+        return
+
+    await ctx.send("Thank you for submitting your answer. Final results will be shared when the challenge ends.")
+    
+    is_correct, _ = check_answer(answer, current_challenge['answer'])
+    points = {'easy': 120, 'medium': 160, 'hard': 240}.get(current_challenge['difficulty'], 150)
+    if not is_correct:
+        points = -20  # Deduct points for incorrect answers
+
+    await update_user_stats(user_id, current_challenge['id'], is_correct, points)
 
 @tasks.loop(time=time(hour=21, minute=30))  # 9:30 PM IST
 async def challenge_time_over():
     try:
+        current_challenge = await get_current_challenge()
+        if not current_challenge:
+            return
+
+        correct_submissions = await get_correct_challenge_submissions(current_challenge['id'])
+        incorrect_submissions = await get_incorrect_challenge_submissions(current_challenge['id'])
+
         challenge_over_message = (
             "🕒 Daily SQL Challenge Time Over 🕒\n\n"
-            "The time for today's challenge has ended. "
-            "Don't worry if you missed it – a new challenge will be posted tomorrow!\n"
-            "Keep practicing and improving your SQL skills! 💪"
+            f"The challenge for today (Question ID: {current_challenge['id']}) has ended.\n\n"
+            "Correct Submissions:\n"
         )
+        for submission in correct_submissions:
+            challenge_over_message += f"- {submission['username']}\n"
+        
+        challenge_over_message += "\nIncorrect Submissions:\n"
+        for submission in incorrect_submissions:
+            challenge_over_message += f"- {submission['username']}\n"
+        
+        challenge_over_message += "\nIf you missed today's challenge or submitted an incorrect answer, don't worry! A new challenge will be posted tomorrow at 5:30 PM IST. Keep practicing and improving your SQL skills! 💪"
+
         for channel_id in CHANNEL_IDS:
             channel = bot.get_channel(channel_id)
             if channel:
                 await channel.send(challenge_over_message)
+
+        # Clear the current challenge
+        await clear_current_challenge()
     except Exception as e:
         logging.error(f"Error in challenge_time_over task: {e}")
+
+async def get_current_challenge():
+    return await bot.db.fetchrow('SELECT * FROM current_challenge')
+
+async def clear_current_challenge():
+    await bot.db.execute('DELETE FROM current_challenge')
+
+async def get_correct_challenge_submissions(question_id):
+    return await bot.db.fetch('''
+        SELECT u.username FROM user_submissions us
+        JOIN users u ON us.user_id = u.user_id
+        WHERE us.question_id = $1 AND us.is_correct = TRUE
+    ''', question_id)
+
+async def get_incorrect_challenge_submissions(question_id):
+    return await bot.db.fetch('''
+        SELECT u.username FROM user_submissions us
+        JOIN users u ON us.user_id = u.user_id
+        WHERE us.question_id = $1 AND us.is_correct = FALSE
+    ''', question_id)
 
 def setup_logging():
     logger = logging.getLogger('discord')
@@ -635,11 +744,13 @@ logger = setup_logging()
 # Then use logger.info(), logger.error(), etc. instead of print() throughout your code
 
 async def question_timer(ctx, question_id, time_limit):
-    global current_question
     await asyncio.sleep(time_limit * 60)  # Convert minutes to seconds
+    user_id = ctx.author.id
+    current_question = await user_questions.get(user_id)
     if current_question and current_question['id'] == question_id:
-        await ctx.send(f"Time's up! The question (ID: {question_id}) has expired. Use `!question` to get a new question.")
-        current_question = None
+        await ctx.send(f"⏰ Time's up! The question (ID: {question_id}) has expired. Use `!sql` to get a new question.")
+        await user_questions.pop(user_id, None)
+        await user_attempts.pop(user_id, None)
 
 async def get_challenge_questions(num_questions=5):
     async with DB_SEMAPHORE:
@@ -925,7 +1036,19 @@ async def update_user_achievements(ctx, user_id):
     try:
         new_achievements, _ = await check_achievements(user_id)
         if new_achievements:
+            user = await bot.fetch_user(user_id)
+            achievement_message = f"🎉 Congratulations to {user.name}! They've earned new achievements: {', '.join(new_achievements)}"
+            
+            # Send to the user
             await ctx.send(f"Congratulations! You've earned new achievements: {', '.join(new_achievements)}")
+            
+            # Send to the specified bot channels
+            for channel_id in CHANNEL_IDS:
+                channel = bot.get_channel(channel_id)
+                if channel:
+                    await channel.send(achievement_message)
+                else:
+                    logging.warning(f"Channel with ID {channel_id} not found")
     except Exception as e:
         logging.error(f"Error in update_user_achievements: {e}")
         # Don't send an error message to the user for this internal error
@@ -1034,7 +1157,7 @@ async def check_db(ctx):
 @tasks.loop(time=time(hour=0, minute=0))  # Midnight IST
 async def daily_task():
     try:
-        # Task logic
+        # Add any daily maintenance or update tasks here
         logging.info("Daily task completed successfully")
     except Exception as e:
         logging.error(f"Error in daily task: {e}", exc_info=True)
@@ -1044,13 +1167,13 @@ async def daily_task_error(error):
     logging.error(f"Unhandled error in daily task: {error}", exc_info=True)
 
 async def calculate_points(user_id, is_correct, difficulty):
-    base_points = {'easy': 60, 'medium': 80, 'hard': 120}.get(difficulty, 0)
+    base_points = {'easy': 120, 'medium': 160, 'hard': 240}.get(difficulty, 0)  # Doubled
     if is_correct:
         streak = await get_user_streak(user_id)
-        streak_bonus = min(streak * 5, 50)  # Cap streak bonus at 50 points
+        streak_bonus = min(streak * 10, 100)  # Doubled streak bonus, capped at 100
         return base_points + streak_bonus
     else:
-        return -20  # Deduct 20 points for incorrect answers
+        return -40  # Doubled deduction for incorrect answers
 
 async def get_topic_question(ctx, topic_name):
     user_id = ctx.author.id
@@ -1142,10 +1265,21 @@ async def submit_question(ctx, *, question):
 @bot.command()
 async def daily_progress(ctx):
     user_id = ctx.author.id
-    await user_last_active.set(user_id, datetime.now(timezone.utc))  # Add this line
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
     today = get_ist_time().date()
-    daily_points = await get_daily_points(user_id, today)
-    daily_submissions = await get_daily_submissions(user_id, today)
+    
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            daily_points = await conn.fetchval('''
+                SELECT COALESCE(SUM(points), 0)
+                FROM user_submissions
+                WHERE user_id = $1 AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
+            ''', user_id, today)
+            daily_submissions = await conn.fetchval('''
+                SELECT COUNT(*)
+                FROM user_submissions
+                WHERE user_id = $1 AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
+            ''', user_id, today)
     
     await ctx.send(f"📊 Your Daily Progress 📊\n"
                    f"Points earned today: {daily_points}\n"
@@ -1155,8 +1289,16 @@ async def daily_progress(ctx):
 @bot.command()
 async def weekly_progress(ctx):
     user_id = ctx.author.id
-    await user_last_active.set(user_id, datetime.now(timezone.utc))  # Add this line
-    weekly_points = await get_weekly_points(user_id)
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
+    week_start = await get_week_start()
+    
+    async with DB_SEMAPHORE:
+        async with bot.db.acquire() as conn:
+            weekly_points = await conn.fetchval('''
+                SELECT COALESCE(SUM(points), 0)
+                FROM user_submissions
+                WHERE user_id = $1 AND submitted_at >= $2
+            ''', user_id, week_start)
     
     await ctx.send(f"🗓️ Your Weekly Progress 🗓️\n"
                    f"Points earned this week: {weekly_points}\n"
@@ -1187,26 +1329,13 @@ async def company(ctx, *, company_name=None):
                     await list_companies(ctx)
                     return
 
-                # Check if user has attempted all questions from this company
-                attempted = await conn.fetchval("""
-                    SELECT COUNT(*) FROM user_submissions
-                    JOIN questions ON user_submissions.question_id = questions.id
-                    WHERE user_submissions.user_id = $1 AND LOWER(questions.company) = $2
-                """, user_id, best_match)
-
-                total = await conn.fetchval("SELECT COUNT(*) FROM questions WHERE LOWER(company) = $1", best_match)
-
-                if attempted == total:
-                    await ctx.send(f"You've attempted all questions from {best_match.title()}. Try another company:")
-                    await list_companies(ctx)
-                    return
-
                 question = await get_question(company=best_match, user_id=user_id)
                 if question:
                     await user_questions.set(user_id, question)
+                    await user_attempts.set(user_id, 0)
                     await display_question(ctx, question)
                 else:
-                    await ctx.send(f"Sorry, no more questions available for the company '{best_match.title()}' at the moment.")
+                    await ctx.send(f"Sorry, no new questions available for the company '{best_match.title()}' at the moment.")
     except Exception as e:
         logging.error(f"Error in company question command: {e}")
         await ctx.send("An error occurred while fetching a question. Please try again later.")
@@ -1340,6 +1469,210 @@ async def update_user_stats(user_id, question_id, is_correct, points):
     except Exception as e:
         logging.error(f"Error updating user stats: {e}")
         raise
+
+async def get_max_attempts(user_id, question_id):
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                incorrect_submissions = await conn.fetchval('''
+                    SELECT COUNT(*) FROM user_submissions
+                    WHERE user_id = $1 AND question_id = $2 AND is_correct = FALSE
+                ''', user_id, question_id)
+        return max(5 - incorrect_submissions, 1)  # Minimum 1 attempt, maximum 5
+    except Exception as e:
+        logging.error(f"Error getting max attempts: {e}")
+        return 5  # Default to 5 if there's an error
+
+async def get_weekly_heroes():
+    try:
+        week_start = await get_week_start()
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                heroes = await conn.fetch('''
+                    SELECT u.username, SUM(us.points) as total_points
+                    FROM user_submissions us
+                    JOIN users u ON us.user_id = u.user_id
+                    WHERE us.submitted_at >= $1
+                    GROUP BY u.user_id, u.username
+                    ORDER BY total_points DESC
+                    LIMIT 5
+                ''', week_start)
+        return heroes
+    except Exception as e:
+        logging.error(f"Error getting weekly heroes: {e}")
+        return []
+
+async def get_top_10():
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                top_users = await conn.fetch('''
+                    SELECT u.username, SUM(us.points) as total_points
+                    FROM user_submissions us
+                    JOIN users u ON us.user_id = u.user_id
+                    GROUP BY u.user_id, u.username
+                    ORDER BY total_points DESC
+                    LIMIT 10
+                ''')
+        return top_users
+    except Exception as e:
+        logging.error(f"Error getting top 10: {e}")
+        return []
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def update_leaderboards(ctx):
+    await update_leaderboard()
+    await ctx.send("Leaderboards have been manually updated.")
+
+async def update_all_scores(user_id, question_id, is_correct, points):
+    try:
+        # Update user submissions
+        await update_user_stats(user_id, question_id, is_correct, points)
+        
+        # Update weekly points
+        await update_weekly_points(user_id, points)
+        
+        # Update daily points
+        today = get_ist_time().date()
+        await update_daily_points(user_id, today, points)
+        
+        # Update user streak
+        await update_user_streak(user_id, is_correct)
+        
+        # Check and update achievements
+        await update_user_achievements(None, user_id)
+        
+        # Update leaderboards
+        await update_leaderboard()
+        
+    except Exception as e:
+        logging.error(f"Error updating all scores: {e}")
+        raise
+
+@tasks.loop(time=time(hour=9, minute=0))  # 9:00 AM IST
+async def update_weekly_heroes():
+    if datetime.now(pytz.timezone('Asia/Kolkata')).weekday() != 6:  # 6 is Sunday
+        return  # Only run on Sundays
+
+    try:
+        weekly_heroes = await get_weekly_heroes()
+
+        if weekly_heroes:
+            heroes_message = "🏆 Weekly Heroes 🏆\n\n"
+            for i, hero in enumerate(weekly_heroes, 1):
+                emoji = ["🥇", "🥈", "🥉", "🏅", "🏅"][i-1]
+                heroes_message += f"{emoji} {hero['username']}: {hero['total_points']} points\n"
+
+            for channel_id in CHANNEL_IDS:
+                channel = bot.get_channel(channel_id)
+                if channel:
+                    await channel.send(heroes_message)
+
+        # Reset weekly points after posting
+        await reset_weekly_points()
+
+    except Exception as e:
+        logging.error(f"Error in update_weekly_heroes task: {e}")
+
+async def reset_weekly_points():
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                await conn.execute('DELETE FROM weekly_points')
+    except Exception as e:
+        logging.error(f"Error resetting weekly points: {e}")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def post_monthly_leaderboard(ctx):
+    try:
+        now = datetime.now(pytz.timezone('Asia/Kolkata'))
+        last_month_end = now.replace(day=1) - timedelta(days=1)
+        last_month_start = last_month_end.replace(day=1)
+
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                top_10 = await conn.fetch('''
+                    SELECT u.username, SUM(us.points) as total_points
+                    FROM user_submissions us
+                    JOIN users u ON us.user_id = u.user_id
+                    WHERE us.submitted_at >= $1 AND us.submitted_at < $2
+                    GROUP BY u.user_id, u.username
+                    ORDER BY total_points DESC
+                    LIMIT 10
+                ''', last_month_start, last_month_end + timedelta(days=1))
+
+        if top_10:
+            month_name = last_month_end.strftime("%B")
+            top_10_message = f"🏆 Top 10 SQL Masters for {month_name} 🏆\n\n"
+            
+            emojis = ["🥇", "🥈", "🥉", "🎖️", "🏅", "🌟", "💫", "✨", "💎", "🔥"]
+            
+            for i, user in enumerate(top_10, 1):
+                emoji = emojis[i-1]
+                award_name = [
+                    "SQL Grandmaster", "Query Virtuoso", "Data Wizard",
+                    "Schema Sorcerer", "Join Genius", "Index Innovator",
+                    "Subquery Sage", "Optimization Oracle", "Trigger Titan",
+                    "View Visionary"
+                ][i-1]
+                top_10_message += f"{emoji} {user['username']} - {user['total_points']} points\n"
+                top_10_message += f"   🎖️ {award_name}\n\n"
+
+            for channel_id in CHANNEL_IDS:
+                channel = bot.get_channel(channel_id)
+                if channel:
+                    await channel.send(top_10_message)
+
+        await ctx.send("Monthly leaderboard has been posted.")
+    except Exception as e:
+        logging.error(f"Error posting monthly leaderboard: {e}")
+        await ctx.send("An error occurred while posting the monthly leaderboard.")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def admin(ctx):
+    admin_help_text = """
+    🛠️ Admin Commands 🛠️
+
+    Here are the available admin commands:
+
+    1. !update_leaderboards
+       Usage: !update_leaderboards
+       Description: Manually triggers an update of the leaderboards.
+
+    2. !post_monthly_leaderboard
+       Usage: !post_monthly_leaderboard
+       Description: Manually posts the monthly leaderboard.
+
+    3. !add_question
+       Usage: !add_question <question_details>
+       Description: Adds a new question to the database. Use a specific format for question details.
+
+    4. !remove_question
+       Usage: !remove_question <question_id>
+       Description: Removes a question from the database.
+
+    5. !view_reports
+       Usage: !view_reports [limit]
+       Description: Views recent question reports. Optionally specify a limit (default 10).
+
+    6. !ban_user
+       Usage: !ban_user <user_id> <reason>
+       Description: Bans a user from using the bot.
+
+    7. !unban_user
+       Usage: !unban_user <user_id>
+       Description: Unbans a user, allowing them to use the bot again.
+
+    8. !view_stats
+       Usage: !view_stats
+       Description: Displays overall bot usage statistics.
+
+    Remember, with great power comes great responsibility. Use these commands wisely!
+    """
+    await ctx.send(admin_help_text)
 
 def main():
     loop = asyncio.get_event_loop()
