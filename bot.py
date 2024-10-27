@@ -242,7 +242,7 @@ async def display_question(ctx, question):
         message += f"\nDataset:\n```\n{question['datasets']}\n```"
     message += "\nUse `!submit` followed by your SQL query to answer!"
     message += "\nUse `!skip` if you want to try a different question.\n"
-    message += f"\nUse this site to create temp table to practice this question {https://zeroanalyst.com/sql/}"
+    message += f"\nUse Create Table in site for free \![Click Here To Create Table](https://zeroanalyst.com/sql/)"
     message += "\nYou can come back here and submit your code here! using `!submit` command"
     
     await ctx.send(message)
