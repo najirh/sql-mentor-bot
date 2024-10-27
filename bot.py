@@ -599,7 +599,7 @@ async def list_topics(ctx):
         logging.error(f"Error in list_topics: {e}")
         await ctx.send("An error occurred while fetching the topic list. Please try again later.")
 
-@tasks.loop(time=time(hour=22, minute=0))  # 10:00 PM IST
+@tasks.loop(time=time(hour=16, minute=30))  # 10:00 PM IST
 async def update_leaderboard():
     try:
         top_10 = await get_top_10()
@@ -1711,7 +1711,7 @@ async def view_stats(ctx):
     stats_text += f"Total Submissions: {stats['total_submissions']}\n"
     await ctx.send(stats_text)
 
-@tasks.loop(time=time(hour=9, minute=0))  # 9:00 AM IST
+@tasks.loop(time=time(hour=3, minute=30))  # 9:00 AM IST
 async def update_weekly_heroes():
     if datetime.now(pytz.timezone('Asia/Kolkata')).weekday() != 6:  # 6 is Sunday
         return  # Only run on Sundays
