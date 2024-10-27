@@ -159,6 +159,20 @@ async def get_question(difficulty=None, user_id=None, topic=None, company=None):
         logging.error(f"Error fetching question: {e}")
         return None
 
+async def get_question_by_id(question_id):
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                query = '''
+                    SELECT * FROM questions
+                    WHERE id = $1
+                '''
+                question = await conn.fetchrow(query, question_id)
+        return question
+    except Exception as e:
+        logging.error(f"Error fetching question by ID: {e}")
+        return None
+
 async def get_week_start():
     ist_now = get_ist_time()
     return ist_now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=ist_now.weekday())
@@ -608,34 +622,51 @@ async def update_leaderboard():
 async def update_leaderboard_error(error):
     logging.error(f"Unhandled error in update_leaderboard task: {error}", exc_info=True)
 
-@tasks.loop(time=time(hour=17, minute=30))  # 5:30 PM IST
+@tasks.loop(time=time(hour=20, minute=15))  # 5:30 PM IST
 async def daily_challenge():
     try:
-        # Get a fresh question that hasn't been used in a challenge before
         question = await get_fresh_challenge_question()
         if question:
-            challenge_points = {'easy': 120, 'medium': 160, 'hard': 240}.get(question['difficulty'], 150)
+            base_points = {'easy': 60, 'medium': 80, 'hard': 120}.get(question['difficulty'], 60)
+            challenge_points = base_points * 2
+
+            end_time = get_ist_time() + timedelta(hours=4)
+            end_time_str = end_time.strftime("%I:%M %p IST")
+            
             challenge_message = (
                 "🌟 Daily SQL Challenge 🌟\n\n"
                 f"Here's today's challenge (worth {challenge_points} points):\n\n"
                 f"Question ID: {question['id']}\n"
                 f"Difficulty: {question['difficulty'].capitalize()}\n"
+                f"Time Limit: 4 hours (Ends at {end_time_str})\n\n"
                 f"{question['question']}\n\n"
                 f"Dataset:\n```\n{question['datasets']}\n```\n\n"
-                "⏳ You have 4 hours to submit your answer!\n"
                 "Use `!submit_challenge` followed by your SQL query to answer."
             )
+            
+            await set_current_challenge(question['id'], end_time)
+            
             for channel_id in CHANNEL_IDS:
                 channel = bot.get_channel(channel_id)
                 if channel:
                     await channel.send(challenge_message)
-            
-            # Store the current challenge question
-            await set_current_challenge(question['id'])
-        else:
-            logging.warning("No fresh questions available for the daily challenge.")
     except Exception as e:
         logging.error(f"Error in daily_challenge task: {e}")
+
+@daily_challenge.before_loop
+async def before_daily_challenge():
+    await bot.wait_until_ready()
+
+# @challenge_time_over.before_loop
+# async def before_challenge_time_over():
+#     await bot.wait_until_ready()
+
+async def is_challenge_active():
+    current_challenge = await get_current_challenge()
+    if not current_challenge:
+        return False
+    now = get_ist_time()
+    return now <= current_challenge['end_time']
 
 async def get_fresh_challenge_question():
     try:
@@ -658,63 +689,109 @@ async def get_fresh_challenge_question():
         logging.error(f"Error getting fresh challenge question: {e}")
         return None
 
-async def set_current_challenge(question_id):
-    await bot.db.execute('''
-        INSERT INTO current_challenge (question_id, start_time)
-        VALUES ($1, $2)
-        ON CONFLICT (id) DO UPDATE SET question_id = $1, start_time = $2
-    ''', question_id, get_ist_time())
+
+async def set_current_challenge(question_id, end_time):
+    try:
+        async with bot.db.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO current_challenge (question_id, end_time)
+                VALUES ($1, $2)
+                ON CONFLICT (id) DO UPDATE 
+                SET question_id = $1, end_time = $2
+            ''', question_id, end_time)
+    except Exception as e:
+        logging.error(f"Error setting current challenge: {e}")
 
 @bot.command()
 async def submit_challenge(ctx, *, answer):
     user_id = ctx.author.id
-    current_challenge = await get_current_challenge()
-    if not current_challenge:
-        await ctx.send("There is no active challenge right now.")
-        return
-
-    await ctx.send("Thank you for submitting your answer. Final results will be shared when the challenge ends.")
+    username = str(ctx.author)
     
-    is_correct, _ = check_answer(answer, current_challenge['answer'])
-    points = {'easy': 120, 'medium': 160, 'hard': 240}.get(current_challenge['difficulty'], 150)
-    if not is_correct:
-        points = -10  # Deduct points for incorrect answers
+    try:
+        if not await is_challenge_active():
+            await ctx.send("There is no active challenge right now. The next challenge will be posted at 5:30 PM IST!")
+            return
 
-    await update_user_stats(user_id, current_challenge['id'], is_correct, points)
+        current_challenge = await get_current_challenge()
+        
+        # Check for previous submission
+        async with bot.db.acquire() as conn:
+            previous_submission = await conn.fetchrow('''
+                SELECT * FROM challenge_submissions 
+                WHERE user_id = $1 AND challenge_id = $2
+            ''', user_id, current_challenge['id'])
+            
+        if previous_submission:
+            await ctx.send("You've already submitted an answer for this challenge!")
+            return
 
-@tasks.loop(time=time(hour=21, minute=30))  # 9:30 PM IST
+        # Store submission
+        async with bot.db.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO challenge_submissions (user_id, challenge_id, answer)
+                VALUES ($1, $2, $3)
+            ''', user_id, current_challenge['id'], answer)
+
+        await ctx.send("✅ Your answer has been submitted! Results will be revealed when the challenge ends at 9:30 PM IST.")
+
+    except Exception as e:
+        logging.error(f"Error in submit_challenge: {e}")
+        await ctx.send("An error occurred while processing your submission. Please try again.")
+
+@tasks.loop(time=time(hour=0, minute=15))  # 9:30 PM IST
 async def challenge_time_over():
     try:
         current_challenge = await get_current_challenge()
         if not current_challenge:
             return
 
-        correct_submissions = await get_correct_challenge_submissions(current_challenge['id'])
-        incorrect_submissions = await get_incorrect_challenge_submissions(current_challenge['id'])
+        question = await get_question_by_id(current_challenge['question_id'])
+        if not question:
+            logging.error(f"Could not find question with ID {current_challenge['question_id']}")
+            return
+
+        submissions = await bot.db.fetch('''
+            SELECT cs.*, u.username, 
+                   CASE WHEN check_answer($1, cs.answer) THEN TRUE ELSE FALSE END as is_correct
+            FROM challenge_submissions cs
+            JOIN users u ON cs.user_id = u.user_id
+            WHERE cs.challenge_id = $2
+        ''', question['answer'], current_challenge['id'])
+
+        base_points = {'easy': 60, 'medium': 80, 'hard': 120}.get(question['difficulty'], 60)
+        challenge_points = base_points * 2
 
         challenge_over_message = (
             "🕒 Daily SQL Challenge Time Over 🕒\n\n"
-            f"The challenge for today (Question ID: {current_challenge['id']}) has ended.\n\n"
-            "Correct Submissions:\n"
+            f"Challenge ID: {current_challenge['id']}\n"
+            "🎉 Correct Submissions:\n"
         )
-        for submission in correct_submissions:
-            challenge_over_message += f"- {submission['username']}\n"
-        
-        challenge_over_message += "\nIncorrect Submissions:\n"
-        for submission in incorrect_submissions:
-            challenge_over_message += f"- {submission['username']}\n"
-        
-        challenge_over_message += "\nIf you missed today's challenge or submitted an incorrect answer, don't worry! A new challenge will be posted tomorrow at 5:30 PM IST. Keep practicing and improving your SQL skills! 💪"
+
+        # Process submissions and update user_submissions
+        for sub in submissions:
+            if sub['is_correct']:
+                challenge_over_message += f"- {sub['username']} (+{challenge_points} points)\n"
+                await update_user_stats(sub['user_id'], question['id'], True, challenge_points)
+            else:
+                challenge_over_message += f"- {sub['username']} (incorrect)\n"
+                await update_user_stats(sub['user_id'], question['id'], False, 0)
+
+        # Fix the f-string formatting
+        challenge_over_message += f"\nCorrect Answer:\n```sql\n{question['answer']}\n```\n"
+        challenge_over_message += "\nA new challenge will be posted tomorrow at 5:30 PM IST. Keep practicing! 💪"
 
         for channel_id in CHANNEL_IDS:
             channel = bot.get_channel(channel_id)
             if channel:
                 await channel.send(challenge_over_message)
 
-        # Clear the current challenge
         await clear_current_challenge()
     except Exception as e:
         logging.error(f"Error in challenge_time_over task: {e}")
+
+@challenge_time_over.before_loop
+async def before_challenge_time_over():
+    await bot.wait_until_ready()
 
 async def get_current_challenge():
     return await bot.db.fetchrow('SELECT * FROM current_challenge')
@@ -1083,7 +1160,40 @@ async def ensure_tables_exist():
                         message TEXT NOT NULL,
                         posted BOOLEAN DEFAULT FALSE
                     );
+
+                    CREATE TABLE IF NOT EXISTS challenge_history (
+                        id SERIAL PRIMARY KEY,
+                        question_id INTEGER NOT NULL,
+                        challenge_date DATE NOT NULL,
+                        UNIQUE(question_id, challenge_date)
+                    );
+
+                    CREATE TABLE IF NOT EXISTS challenge_submissions (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT NOT NULL,
+                        challenge_id INTEGER NOT NULL,
+                        answer TEXT NOT NULL,
+                        submitted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, challenge_id)
+                    );
                                    
+                    CREATE TABLE IF NOT EXISTS user_challenges (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT NOT NULL,
+                        total_questions INTEGER NOT NULL,
+                        correct_answers INTEGER NOT NULL,
+                        time_taken FLOAT NOT NULL,
+                        completed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+                    
+                    CREATE TABLE IF NOT EXISTS current_challenge (
+                        id SERIAL PRIMARY KEY,
+                        question_id INTEGER NOT NULL,
+                        start_time TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        end_time TIMESTAMP WITH TIME ZONE,
+                        CONSTRAINT one_active_challenge UNIQUE (id)
+                    );
+
                     CREATE TABLE IF NOT EXISTS questions (
                         id SERIAL PRIMARY KEY,
                         question TEXT NOT NULL,
@@ -1146,11 +1256,6 @@ async def ensure_tables_exist():
                         question_id INT,
                         remarks TEXT,
                         reported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-
-                    CREATE TABLE IF NOT EXISTS challenge_history (
-                        question_id INTEGER PRIMARY KEY,
-                        challenge_date DATE NOT NULL
                     );
                 ''')
         logging.info("All tables created successfully")
