@@ -1320,7 +1320,7 @@ async def daily_task_error(error):
     logging.error(f"Unhandled error in daily task: {error}", exc_info=True)
 
 async def calculate_points(user_id, is_correct, difficulty):
-    base_points = {'easy': 120, 'medium': 160, 'hard': 240}.get(difficulty, 0)  # Doubled
+    base_points = {'easy': 60, 'medium': 80, 'hard': 120}.get(difficulty, 0)  # Doubled
     if is_correct:
         streak = await get_user_streak(user_id)
         streak_bonus = min(streak * 10, 100)  # Doubled streak bonus, capped at 100
