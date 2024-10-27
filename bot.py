@@ -622,7 +622,7 @@ async def update_leaderboard():
 async def update_leaderboard_error(error):
     logging.error(f"Unhandled error in update_leaderboard task: {error}", exc_info=True)
 
-@tasks.loop(time=time(hour=20, minute=15))  # 5:30 PM IST
+@tasks.loop(time=time(hour=12, minute=0))  # 5:30 PM IST
 async def daily_challenge():
     try:
         question = await get_fresh_challenge_question()
@@ -738,7 +738,7 @@ async def submit_challenge(ctx, *, answer):
         logging.error(f"Error in submit_challenge: {e}")
         await ctx.send("An error occurred while processing your submission. Please try again.")
 
-@tasks.loop(time=time(hour=0, minute=15))  # 9:30 PM IST
+@tasks.loop(time=time(hour=16, minute=0))  # 9:30 PM IST
 async def challenge_time_over():
     try:
         current_challenge = await get_current_challenge()
