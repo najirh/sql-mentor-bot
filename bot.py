@@ -255,7 +255,11 @@ async def display_question(ctx, question):
     if question['datasets']:
         message += f"\nDataset:\n```\n{question['datasets']}\n```"
     message += "\nUse `!submit` followed by your SQL query to answer!"
-    message += "\nUse `!skip` if you want to try a different question."
+    message += "\nUse `!skip` if you want to try a different question.\n"
+    message += "\nUse CREATE TABLE on the site for free! [Click Here](https://zeroanalyst.com/sql) to create a table."
+    message += "\nCome back within the given time and submit your solution code using the `!submit` command."
+
+    
     
     await ctx.send(message)
     
@@ -370,7 +374,8 @@ async def process_answer(ctx, user_id, answer):
         
         if current_attempts < max_attempts:  # Changed from max_attempts - 1
             await ctx.send(f"❌ Incorrect. {points} points deducted. {feedback}\n"
-                          f"You have {max_attempts - current_attempts} attempts left. Use `!try_again` to attempt this question again.")
+                          f"You have {max_attempts - current_attempts} attempts left. Use `!try_again` to attempt this question again.\n"
+                          f"\nIf you believe this question is incorrect, use !report question_id <your feedback here>.")
         else:
             await ctx.send(f"❌ Incorrect. {points} points deducted. You've used all your attempts for this question. Use `!sql` to get a new question.")
             await user_questions.pop(user_id, None)
