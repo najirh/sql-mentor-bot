@@ -241,9 +241,7 @@ async def display_question(ctx, question):
     if question['datasets']:
         message += f"\nDataset:\n```\n{question['datasets']}\n```"
     message += "\nUse `!submit` followed by your SQL query to answer!"
-    message += "\nUse `!skip` if you want to try a different question.\n"
-    message += f"\nUse Create Table in site for free \![Click Here To Create Table](https://zeroanalyst.com/sql/)"
-    message += "\nYou can come back here and submit your code here! using `!submit` command"
+    message += "\nUse `!skip` if you want to try a different question."
     
     await ctx.send(message)
     
@@ -324,8 +322,9 @@ async def submit(ctx, *, answer):
     await user_last_active.set(user_id, datetime.now(timezone.utc))
     question = await user_questions.get(user_id)
     if question:
-        current_attempts = await user_attempts.get(user_id, 0)
-        await user_attempts.set(user_id, current_attempts + 1)
+        # Remove this line as we're double-counting attempts
+        # current_attempts = await user_attempts.get(user_id, 0)
+        # await user_attempts.set(user_id, current_attempts + 1)  # Remove this
         await process_answer(ctx, user_id, answer)
     else:
         await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
@@ -352,17 +351,14 @@ async def process_answer(ctx, user_id, answer):
     else:
         max_attempts = await get_max_attempts(user_id, question['id'])
         current_attempts = await user_attempts.get(user_id, 0)
-        if current_attempts < max_attempts - 1:
-            await user_attempts.set(user_id, current_attempts + 1)
-            await ctx.send(
-    f"❌ Incorrect. {points} points deducted. {feedback}\n"
-    f"You have {max_attempts - current_attempts - 1} attempts left. "
-    "Use `!try_again` to attempt this question again.\n\n"
-    "If you believe the question is incorrect, use "
-    "`!report <question_id> <your feedback>` so we can review it."
-)
+        current_attempts += 1  # Increment attempt counter
+        await user_attempts.set(user_id, current_attempts)
+        
+        if current_attempts < max_attempts:  # Changed from max_attempts - 1
+            await ctx.send(f"❌ Incorrect. {points} points deducted. {feedback}\n"
+                          f"You have {max_attempts - current_attempts} attempts left. Use `!try_again` to attempt this question again.")
         else:
-            await ctx.send(f"❌ Incorrect. {points} points deducted. You've used all your attempts for this question. The correct answer was:\n```sql\n{question['answer']}\n```")
+            await ctx.send(f"❌ Incorrect. {points} points deducted. You've used all your attempts for this question. Use `!sql` to get a new question.")
             await user_questions.pop(user_id, None)
             await user_attempts.pop(user_id, None)
 
