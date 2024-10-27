@@ -354,7 +354,13 @@ async def process_answer(ctx, user_id, answer):
         current_attempts = await user_attempts.get(user_id, 0)
         if current_attempts < max_attempts - 1:
             await user_attempts.set(user_id, current_attempts + 1)
-            await ctx.send(f"❌ Incorrect. {points} points deducted. {feedback}\nYou have {max_attempts - current_attempts - 1} attempts left. Use `!try_again` to attempt this question again.")
+            await ctx.send(
+    f"❌ Incorrect. {points} points deducted. {feedback}\n"
+    f"You have {max_attempts - current_attempts - 1} attempts left. "
+    "Use `!try_again` to attempt this question again.\n\n"
+    "If you believe the question is incorrect, use "
+    "`!report <question_id> <your feedback>` so we can review it."
+)
         else:
             await ctx.send(f"❌ Incorrect. {points} points deducted. You've used all your attempts for this question. The correct answer was:\n```sql\n{question['answer']}\n```")
             await user_questions.pop(user_id, None)
