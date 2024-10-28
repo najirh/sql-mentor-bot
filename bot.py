@@ -666,7 +666,7 @@ async def update_leaderboard():
 async def update_leaderboard_error(error):
     logging.error(f"Unhandled error in update_leaderboard task: {error}", exc_info=True)
 
-@tasks.loop(time=time(hour=16, minute=0))  # 8:30 PM IST
+@tasks.loop(time=time(hour=16, minute=40))  # 9:20 PM IST
 async def daily_challenge():
     try:
         logging.info("Starting daily challenge task")
@@ -675,9 +675,12 @@ async def daily_challenge():
             logging.error("No available questions for challenge")
             return
 
-        # Set end time to 6 minutes from now
+        # Define base points based on difficulty
+        base_points = {'easy': 60, 'medium': 80, 'hard': 120}.get(question['difficulty'], 60)
+        
+        # Set end time to 5 minutes from now
         now = datetime.now(pytz.UTC)
-        end_time = now + timedelta(minutes=6)
+        end_time = now + timedelta(minutes=5)
         
         async with DB_SEMAPHORE:
             async with bot.db.acquire() as conn:
@@ -690,20 +693,27 @@ async def daily_challenge():
                     VALUES ($1, $2)
                 ''', question['id'], end_time)
         
-        # Format challenge message
         challenge_message = (
-            "🎯 Daily SQL Challenge 🎯\n\n"
-            f"Question ID: {question['id']}\n"
-            f"Difficulty: {question['difficulty'].capitalize()}\n"
-            f"Time Limit: 6 minutes (Ends at {end_time.astimezone(pytz.timezone('Asia/Kolkata')).strftime('%I:%M %p')} IST)\n\n"
-            f"Question:\n{question['question']}\n"
+            "🌟 **DAILY SQL CHALLENGE** 🌟\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📝 Question ID: {question['id']}\n"
+            f"📊 Difficulty: {question['difficulty'].capitalize()} (Worth {base_points * 2} points!)\n"
+            f"⏰ Time Limit: 5 minutes (Ends at 9:25 PM IST)\n"
+            f"🎯 Topic: {question.get('topic', 'General')}\n\n"
+            f"**Challenge Question:**\n{question['question']}\n"
         )
         
         if question['datasets']:
-            challenge_message += f"\nDataset:\n```sql\n{question['datasets']}\n```"
+            challenge_message += f"\n📚 **Dataset:**\n```sql\n{question['datasets']}\n```"
         
-        challenge_message += "\nSubmit your answer using: !submit_challenge <your SQL query>"
-        
+        challenge_message += (
+            "\n🔥 **How to Participate:**\n"
+            "• Submit your answer using: `!submit_challenge <your SQL query>`\n"
+            "• First correct submission gets bonus points! 🎉\n"
+            "• Incorrect submissions: -20 points ⚠️\n\n"
+            "💪 Good luck, SQL Champions!"
+        )
+
         # Send to all channels
         for channel_id in CHANNEL_IDS:
             channel = bot.get_channel(channel_id)
@@ -712,9 +722,11 @@ async def daily_challenge():
                 
     except Exception as e:
         logging.error(f"Error in daily challenge: {e}")
+
 @daily_challenge.before_loop
 async def before_daily_challenge():
     await bot.wait_until_ready()
+
 
 # @challenge_time_over.before_loop
 # async def before_challenge_time_over():
@@ -794,60 +806,60 @@ async def submit_challenge(ctx, *, answer):
     try:
         async with DB_SEMAPHORE:
             async with bot.db.acquire() as conn:
-                # Get current challenge
                 current_challenge = await conn.fetchrow('SELECT * FROM current_challenge')
                 if not current_challenge:
-                    await ctx.send("There is no active challenge right now. The next challenge will be posted at 8:30 PM IST!")
+                    await ctx.send("🤔 There is no active challenge right now. The next challenge will be posted at 9:20 PM IST!")
                     return
 
-                # Check if challenge is still active
                 now = datetime.now(pytz.UTC)
                 end_time = current_challenge['end_time'].replace(tzinfo=pytz.UTC)
                 
                 if now > end_time:
-                    await ctx.send("The challenge time is over! Wait for the next challenge at 8:30 PM IST.")
+                    await ctx.send("⏰ The challenge time is over! Wait for the next challenge at 9:20 PM IST.")
                     return
 
-                # Check for previous submission
                 previous_submission = await conn.fetchrow('''
                     SELECT * FROM challenge_submissions 
                     WHERE user_id = $1 AND challenge_id = $2
                 ''', user_id, current_challenge['id'])
                 
                 if previous_submission:
-                    await ctx.send("You've already submitted an answer for this challenge!")
+                    await ctx.send("🔄 You've already submitted an answer for this challenge!\n✨ Stay tuned for the results!")
                     return
 
-                # Store submission
                 await conn.execute('''
                     INSERT INTO challenge_submissions (user_id, challenge_id, answer)
                     VALUES ($1, $2, $3)
                 ''', user_id, current_challenge['id'], answer)
 
-        await ctx.send("✅ Your answer has been submitted! Results will be revealed when the challenge ends.")
+        # Send a fancy confirmation message
+        await ctx.send(
+            "🎯 **Challenge Submission Received!**\n\n"
+            f"👤 Submitted by: **{ctx.author.name}**\n"
+            f"⏰ Time: **{get_ist_time().strftime('%I:%M:%S %p')} IST**\n"
+            "📊 Status: **Processing...** 🔄\n\n"
+            "🌟 Stay tuned for results! Good luck! 🍀"
+        )
 
     except Exception as e:
         logging.error(f"Error in submit_challenge: {e}")
-        await ctx.send("An error occurred while processing your submission. Please try again.")
+        await ctx.send("❌ An error occurred while processing your submission. Please try again.")
 
-@tasks.loop(time=time(hour=16, minute=5))  # 8:51 PM IST
+@tasks.loop(time=time(hour=16, minute=45))  # 9:25 PM IST
 async def challenge_time_over():
     try:
         async with DB_SEMAPHORE:
             async with bot.db.acquire() as conn:
                 logging.info("Processing challenge results...")
-                # Get current challenge
                 current_challenge = await conn.fetchrow('SELECT * FROM current_challenge')
                 if not current_challenge:
                     return
 
-                # Get question details
                 question = await get_question_by_id(current_challenge['question_id'])
                 if not question:
                     logging.error(f"Could not find question with ID {current_challenge['question_id']}")
                     return
 
-                # Get all submissions
                 submissions = await conn.fetch('''
                     SELECT cs.*, u.username
                     FROM challenge_submissions cs
@@ -855,34 +867,47 @@ async def challenge_time_over():
                     WHERE cs.challenge_id = $1
                 ''', current_challenge['id'])
 
-                # Calculate points
                 base_points = {'easy': 60, 'medium': 80, 'hard': 120}.get(question['difficulty'], 60)
                 challenge_points = base_points * 2
 
-                # Prepare result message
                 challenge_over_message = (
-                    "🕒 Daily SQL Challenge Time Over 🕒\n\n"
-                    f"Challenge ID: {current_challenge['id']}\n"
-                    "🎉 Submissions:\n"
+                    "🏆 **DAILY CHALLENGE RESULTS** 🏆\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"📝 Challenge ID: {current_challenge['id']}\n"
+                    f"📊 Difficulty: {question['difficulty'].capitalize()}\n"
+                    f"💫 Points Available: {challenge_points}\n\n"
                 )
 
-                # Process submissions and update user_submissions
+                correct_submissions = []
+                incorrect_submissions = []
+                
                 for sub in submissions:
-                    # Compare answers after normalizing them
                     user_answer = sqlparse.format(sub['answer'], strip_comments=True, reindent=True).strip().lower()
                     correct_answer = sqlparse.format(question['answer'], strip_comments=True, reindent=True).strip().lower()
                     is_correct = user_answer == correct_answer
-
+                    
                     if is_correct:
-                        challenge_over_message += f"- {sub['username']} (+{challenge_points} points)\n"
+                        correct_submissions.append(f"🌟 {sub['username']} (+{challenge_points} points)")
                         await update_user_stats(sub['user_id'], question['id'], True, challenge_points)
                     else:
-                        challenge_over_message += f"- {sub['username']} (incorrect)\n"
-                        await update_user_stats(sub['user_id'], question['id'], False, 0)
+                        incorrect_submissions.append(f"❌ {sub['username']} (-20 points)")
+                        await update_user_stats(sub['user_id'], question['id'], False, -20)
 
-                # Add correct answer to message
-                challenge_over_message += f"\nCorrect Answer:\n```sql\n{question['answer']}\n```\n"
-                challenge_over_message += "\nA new challenge will be posted at 8:45 PM IST. Keep practicing! 💪"
+                # Add submissions to message
+                if correct_submissions:
+                    challenge_over_message += "**🎉 CORRECT SUBMISSIONS:**\n" + "\n".join(correct_submissions) + "\n"
+                else:
+                    challenge_over_message += "**😮 No correct submissions this time!**\n"
+
+                if incorrect_submissions:
+                    challenge_over_message += "\n**❌ INCORRECT SUBMISSIONS:**\n" + "\n".join(incorrect_submissions) + "\n"
+
+                challenge_over_message += (
+                    f"\n📚 **Correct Answer:**\n```sql\n{question['answer']}\n```\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "🌟 Next challenge at 9:20 PM IST!\n"
+                    "💪 Keep practicing and level up your SQL skills!"
+                )
 
                 # Send results to all channels
                 for channel_id in CHANNEL_IDS:
@@ -899,6 +924,7 @@ async def challenge_time_over():
 @challenge_time_over.before_loop
 async def before_challenge_time_over():
     await bot.wait_until_ready()
+
 # Fix this function
 async def get_current_challenge():
     try:
