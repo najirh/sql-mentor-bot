@@ -82,7 +82,14 @@ Please refer to our [Contribution Guidelines](link-to-contribution-guidelines) f
 
 ## License
 
-[Your chosen license here]
+Copyright (c) [OCT 2024] Zero Analyst  
+Author: Najir  
+
+All Rights Reserved.  
+
+This project and its contents are the exclusive property of Zero Analyst.  
+Unauthorized copying, distribution, modification, or use of this project, in whole or in part, is strictly prohibited without explicit written permission from the author or the company.  
+
 
 ## Contact
 
