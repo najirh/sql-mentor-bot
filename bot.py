@@ -385,7 +385,7 @@ async def process_answer(ctx, user_id, answer):
         if current_attempts < max_attempts:  # Changed from max_attempts - 1
             await ctx.send(f"❌ Incorrect. {points} points deducted. {feedback}\n"
                           f"You have {max_attempts - current_attempts} attempts left. Use `!try_again` to attempt this question again.\n"
-                          f"\nIf you believe this question is incorrect, use !report question_id <your feedback here>.")
+                          f"\nIf you believe this question is incorrect, use `!report question_id` <your feedback here>.")
         else:
             await ctx.send(f"❌ Incorrect. {points} points deducted. You've used all your attempts for this question. Use `!sql` to get a new question.")
             await user_questions.pop(user_id, None)
@@ -666,7 +666,7 @@ async def update_leaderboard():
 async def update_leaderboard_error(error):
     logging.error(f"Unhandled error in update_leaderboard task: {error}", exc_info=True)
 
-@tasks.loop(time=time(hour=16, minute=40))  # 9:20 PM IST
+@tasks.loop(time=time(hour=12, minute=0))  # 5:30 PM IST
 async def daily_challenge():
     try:
         logging.info("Starting daily challenge task")
@@ -698,7 +698,7 @@ async def daily_challenge():
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📝 Question ID: {question['id']}\n"
             f"📊 Difficulty: {question['difficulty'].capitalize()} (Worth {base_points * 2} points!)\n"
-            f"⏰ Time Limit: 5 minutes (Ends at 9:25 PM IST)\n"
+            f"⏳ Time Limit: 4 hours (Ends at 9:25 PM IST)\n"
             f"🎯 Topic: {question.get('topic', 'General')}\n\n"
             f"**Challenge Question:**\n{question['question']}\n"
         )
@@ -815,7 +815,7 @@ async def submit_challenge(ctx, *, answer):
                 end_time = current_challenge['end_time'].replace(tzinfo=pytz.UTC)
                 
                 if now > end_time:
-                    await ctx.send("⏰ The challenge time is over! Wait for the next challenge at 9:20 PM IST.")
+                    await ctx.send("⏰ The challenge time is over! Wait for the next challenge at 5:30 PM tomorrow.")
                     return
 
                 previous_submission = await conn.fetchrow('''
@@ -845,7 +845,7 @@ async def submit_challenge(ctx, *, answer):
         logging.error(f"Error in submit_challenge: {e}")
         await ctx.send("❌ An error occurred while processing your submission. Please try again.")
 
-@tasks.loop(time=time(hour=16, minute=45))  # 9:25 PM IST
+@tasks.loop(time=time(hour=16, minute=0))  # 9:30 PM IST
 async def challenge_time_over():
     try:
         async with DB_SEMAPHORE:
@@ -905,7 +905,7 @@ async def challenge_time_over():
                 challenge_over_message += (
                     f"\n📚 **Correct Answer:**\n```sql\n{question['answer']}\n```\n"
                     "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "🌟 Next challenge at 9:20 PM IST!\n"
+                    "🌟 Next challenge at 5:30 PM IST! tomorrow\n"
                     "💪 Keep practicing and level up your SQL skills!"
                 )
 
