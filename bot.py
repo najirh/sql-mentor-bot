@@ -680,7 +680,7 @@ async def daily_challenge():
         
         # Set end time to 5 minutes from now
         now = datetime.now(pytz.UTC)
-        end_time = now + timedelta(minutes=5)
+        end_time = now + timedelta(hours=4)
         
         async with DB_SEMAPHORE:
             async with bot.db.acquire() as conn:
