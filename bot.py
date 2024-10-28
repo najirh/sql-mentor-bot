@@ -256,11 +256,10 @@ async def display_question(ctx, question):
         message += f"\nDataset:\n```\n{question['datasets']}\n```"
     message += "\nUse `!submit` followed by your SQL query to answer!"
     message += "\nUse `!skip` if you want to try a different question.\n"
+    message += "\nUse `!hint` to get a hint!.\n"
     message += "\nUse CREATE TABLE on the site for free! [Click Here](https://zeroanalyst.com/sql) to create a table."
     message += "\nCome back within the given time and submit your solution code using the `!submit` command."
 
-    
-    
     await ctx.send(message)
     
     # Start the timer
@@ -513,6 +512,35 @@ async def question(ctx):
     except Exception as e:
         logging.error(f"Error in question command: {e}")
         await ctx.send("An error occurred while fetching a question. Please try again later.")
+
+# Add around line 517, before try_again command
+@bot.command()
+@commands.cooldown(1, 30, commands.BucketType.user)  # One hint every 30 seconds
+async def hint(ctx):
+    user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
+    
+    # Get current question
+    question = await user_questions.get(user_id)
+    if not question:
+        await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
+        return
+    
+    # Check if hint exists
+    if not question.get('hint'):
+        await ctx.send("Sorry, no hint available for this question! 🤔")
+        return
+    
+    # Send the hint (simplified without point reduction warning)
+    hint_message = f"💡 Hint:\n{question['hint']}"
+    await ctx.send(hint_message)
+
+@hint.error
+async def hint_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(f"Please wait {error.retry_after:.1f} seconds before requesting another hint!")
+    else:
+        logging.error(f"Error in hint command: {error}")
 
 @bot.command()
 async def try_again(ctx):
@@ -1327,6 +1355,7 @@ async def calculate_points(user_id, is_correct, difficulty):
         return base_points + streak_bonus
     else:
         return -10  # Doubled deduction for incorrect answers
+
 
 async def get_topic_question(ctx, topic_name):
     user_id = ctx.author.id
