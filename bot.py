@@ -666,7 +666,7 @@ async def update_leaderboard():
 async def update_leaderboard_error(error):
     logging.error(f"Unhandled error in update_leaderboard task: {error}", exc_info=True)
 
-@tasks.loop(time=time(hour=15, minute=20))  # 8:30 PM IST
+@tasks.loop(time=time(hour=15, minute=50))  # 8:30 PM IST
 async def daily_challenge():
     try:
         logging.info("Starting daily challenge task")
@@ -830,7 +830,7 @@ async def submit_challenge(ctx, *, answer):
         logging.error(f"Error in submit_challenge: {e}")
         await ctx.send("An error occurred while processing your submission. Please try again.")
 
-@tasks.loop(time=time(hour=15, minute=30))  # 9:30 PM IST
+@tasks.loop(time=time(hour=15, minute=55))  # 8:51 PM IST
 async def challenge_time_over():
     try:
         async with DB_SEMAPHORE:
@@ -847,14 +847,13 @@ async def challenge_time_over():
                     logging.error(f"Could not find question with ID {current_challenge['question_id']}")
                     return
 
-                # Get all submissions and check answers
+                # Get all submissions
                 submissions = await conn.fetch('''
-                    SELECT cs.*, u.username, 
-                           CASE WHEN check_answer($1, cs.answer) THEN TRUE ELSE FALSE END as is_correct
+                    SELECT cs.*, u.username
                     FROM challenge_submissions cs
                     JOIN users u ON cs.user_id = u.user_id
-                    WHERE cs.challenge_id = $2
-                ''', question['answer'], current_challenge['id'])
+                    WHERE cs.challenge_id = $1
+                ''', current_challenge['id'])
 
                 # Calculate points
                 base_points = {'easy': 60, 'medium': 80, 'hard': 120}.get(question['difficulty'], 60)
@@ -864,12 +863,17 @@ async def challenge_time_over():
                 challenge_over_message = (
                     "🕒 Daily SQL Challenge Time Over 🕒\n\n"
                     f"Challenge ID: {current_challenge['id']}\n"
-                    "🎉 Correct Submissions:\n"
+                    "🎉 Submissions:\n"
                 )
 
                 # Process submissions and update user_submissions
                 for sub in submissions:
-                    if sub['is_correct']:
+                    # Compare answers after normalizing them
+                    user_answer = sqlparse.format(sub['answer'], strip_comments=True, reindent=True).strip().lower()
+                    correct_answer = sqlparse.format(question['answer'], strip_comments=True, reindent=True).strip().lower()
+                    is_correct = user_answer == correct_answer
+
+                    if is_correct:
                         challenge_over_message += f"- {sub['username']} (+{challenge_points} points)\n"
                         await update_user_stats(sub['user_id'], question['id'], True, challenge_points)
                     else:
@@ -887,10 +891,10 @@ async def challenge_time_over():
                         await channel.send(challenge_over_message)
 
                 # Clear current challenge
-                await conn.execute('DELETE FROM current_challenge')
+                await clear_current_challenge()
 
     except Exception as e:
-        logging.error(f"Error in challenge_time_over task: {e}", exc_info=True)
+        logging.error(f"Error in challenge_time_over task: {e}")
 
 @challenge_time_over.before_loop
 async def before_challenge_time_over():
