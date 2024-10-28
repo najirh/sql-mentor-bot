@@ -666,38 +666,52 @@ async def update_leaderboard():
 async def update_leaderboard_error(error):
     logging.error(f"Unhandled error in update_leaderboard task: {error}", exc_info=True)
 
-@tasks.loop(time=time(hour=15, minute=0))  # 5:30 PM IST
+@tasks.loop(time=time(hour=15, minute=20))  # 8:30 PM IST
 async def daily_challenge():
     try:
-        # Get a fresh question
+        logging.info("Starting daily challenge task")
         question = await get_fresh_challenge_question()
         if not question:
             logging.error("No available questions for challenge")
             return
 
-        # Set end time to 4 hours from now
+        # Set end time to 6 minutes from now
         now = datetime.now(pytz.UTC)
-        end_time = now + timedelta(minutes=5)
+        end_time = now + timedelta(minutes=6)
         
-        # Set the challenge
-        await set_current_challenge(question['id'], end_time)
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                # Clear any existing challenge first
+                await conn.execute('DELETE FROM current_challenge')
+                
+                # Set the new challenge
+                await conn.execute('''
+                    INSERT INTO current_challenge (question_id, end_time)
+                    VALUES ($1, $2)
+                ''', question['id'], end_time)
         
-        # Post the challenge
+        # Format challenge message
         challenge_message = (
             "🎯 Daily SQL Challenge 🎯\n\n"
-            f"Difficulty: {question['difficulty']}\n"
-            f"Question:\n{question['question']}\n\n"
-            "Submit your answer using: !submit_challenge <your answer>\n"
-            "Challenge ends at 9:30 PM IST"
+            f"Question ID: {question['id']}\n"
+            f"Difficulty: {question['difficulty'].capitalize()}\n"
+            f"Time Limit: 6 minutes (Ends at {end_time.astimezone(pytz.timezone('Asia/Kolkata')).strftime('%I:%M %p')} IST)\n\n"
+            f"Question:\n{question['question']}\n"
         )
         
+        if question['datasets']:
+            challenge_message += f"\nDataset:\n```sql\n{question['datasets']}\n```"
+        
+        challenge_message += "\nSubmit your answer using: !submit_challenge <your SQL query>"
+        
+        # Send to all channels
         for channel_id in CHANNEL_IDS:
             channel = bot.get_channel(channel_id)
             if channel:
                 await channel.send(challenge_message)
+                
     except Exception as e:
         logging.error(f"Error in daily challenge: {e}")
-
 @daily_challenge.before_loop
 async def before_daily_challenge():
     await bot.wait_until_ready()
@@ -778,21 +792,20 @@ async def submit_challenge(ctx, *, answer):
     username = str(ctx.author)
     
     try:
-        # First check if challenge is active
         async with DB_SEMAPHORE:
             async with bot.db.acquire() as conn:
+                # Get current challenge
                 current_challenge = await conn.fetchrow('SELECT * FROM current_challenge')
                 if not current_challenge:
-                    await ctx.send("There is no active challenge right now. The next challenge will be posted at 5:30 PM IST!")
+                    await ctx.send("There is no active challenge right now. The next challenge will be posted at 8:30 PM IST!")
                     return
 
-                # Get challenge end time and check if it's still active
-                now = get_ist_time()
+                # Check if challenge is still active
+                now = datetime.now(pytz.UTC)
                 end_time = current_challenge['end_time'].replace(tzinfo=pytz.UTC)
-                ist_end_time = end_time.astimezone(pytz.timezone('Asia/Kolkata'))
                 
-                if now > ist_end_time:
-                    await ctx.send("The challenge time is over! Wait for the next challenge at 5:30 PM IST.")
+                if now > end_time:
+                    await ctx.send("The challenge time is over! Wait for the next challenge at 8:30 PM IST.")
                     return
 
                 # Check for previous submission
@@ -805,23 +818,19 @@ async def submit_challenge(ctx, *, answer):
                     await ctx.send("You've already submitted an answer for this challenge!")
                     return
 
-                # Ensure user exists
-                await ensure_user_exists(user_id, username)
-
                 # Store submission
                 await conn.execute('''
                     INSERT INTO challenge_submissions (user_id, challenge_id, answer)
                     VALUES ($1, $2, $3)
                 ''', user_id, current_challenge['id'], answer)
 
-        await ctx.send("✅ Your answer has been submitted! Results will be revealed when the challenge ends at 9:30 PM IST.")
+        await ctx.send("✅ Your answer has been submitted! Results will be revealed when the challenge ends.")
 
     except Exception as e:
         logging.error(f"Error in submit_challenge: {e}")
         await ctx.send("An error occurred while processing your submission. Please try again.")
 
-
-@tasks.loop(time=time(hour=15, minute=6))  # 9:30 PM IST
+@tasks.loop(time=time(hour=15, minute=30))  # 9:30 PM IST
 async def challenge_time_over():
     try:
         async with DB_SEMAPHORE:
@@ -869,7 +878,7 @@ async def challenge_time_over():
 
                 # Add correct answer to message
                 challenge_over_message += f"\nCorrect Answer:\n```sql\n{question['answer']}\n```\n"
-                challenge_over_message += "\nA new challenge will be posted tomorrow at 5:30 PM IST. Keep practicing! 💪"
+                challenge_over_message += "\nA new challenge will be posted at 8:45 PM IST. Keep practicing! 💪"
 
                 # Send results to all channels
                 for channel_id in CHANNEL_IDS:
