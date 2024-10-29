@@ -498,31 +498,84 @@ async def get_difficulty_question(ctx, difficulty):
         logging.error(f"Error in {difficulty} command: {e}")
         await ctx.send("An error occurred while fetching a question. Please try again later.")
 
+# @bot.command()
+# async def question(ctx):
+#     user_id = ctx.author.id
+#     await user_last_active.set(user_id, datetime.now(timezone.utc))
+#     username = str(ctx.author)
+#     await ensure_user_exists(user_id, username)
+
+#     try:
+#         async with DB_SEMAPHORE:
+#             async with bot.db.acquire() as conn:
+#                 preference = await conn.fetchval('''
+#                     SELECT preferred_difficulty FROM user_preferences
+#                     WHERE user_id = $1
+#                 ''', user_id)
+        
+#         question = await get_question(difficulty=preference, user_id=user_id)
+#         if question:
+#             await user_questions.set(user_id, question)
+#             await user_attempts.set(user_id, 0)
+#             await display_question(ctx, question)
+#         else:
+#             await ctx.send("Sorry, no new questions available at your preferred difficulty. Try `!reset_preference` to see questions from all difficulties, or use `!topic <topic>` to try a specific topic.")
+#     except Exception as e:
+#         logging.error(f"Error in question command: {e}")
+#         await ctx.send("An error occurred while fetching a question. Please try again later.")
+
 @bot.command()
-async def question(ctx):
+async def question(ctx, question_id: int = None):
     user_id = ctx.author.id
     await user_last_active.set(user_id, datetime.now(timezone.utc))
     username = str(ctx.author)
     await ensure_user_exists(user_id, username)
 
     try:
-        async with DB_SEMAPHORE:
-            async with bot.db.acquire() as conn:
-                preference = await conn.fetchval('''
-                    SELECT preferred_difficulty FROM user_preferences
-                    WHERE user_id = $1
-                ''', user_id)
-        
-        question = await get_question(difficulty=preference, user_id=user_id)
+        # Check daily limit (maintains existing functionality)
+        if not await check_daily_limit(ctx, user_id):
+            return
+
+        if question_id:
+            async with DB_SEMAPHORE:
+                async with bot.db.acquire() as conn:
+                    # Get the specific question
+                    question = await conn.fetchrow('''
+                        SELECT * FROM questions WHERE id = $1
+                        AND id NOT IN (
+                            SELECT question_id FROM user_submissions 
+                            WHERE user_id = $2 AND is_correct = true
+                        )
+                    ''', question_id, user_id)
+                    
+                    if not question:
+                        await ctx.send(f"❌ Question {question_id} is either not found or you've already solved it. Try another question!")
+                        return
+        else:
+            # Original logic for random question based on preference
+            async with DB_SEMAPHORE:
+                async with bot.db.acquire() as conn:
+                    preference = await conn.fetchval('''
+                        SELECT preferred_difficulty FROM user_preferences
+                        WHERE user_id = $1
+                    ''', user_id)
+            
+            question = await get_question(difficulty=preference, user_id=user_id)
+
         if question:
+            # These lines maintain compatibility with hint, try_again, and other functions
             await user_questions.set(user_id, question)
             await user_attempts.set(user_id, 0)
             await display_question(ctx, question)
         else:
             await ctx.send("Sorry, no new questions available at your preferred difficulty. Try `!reset_preference` to see questions from all difficulties, or use `!topic <topic>` to try a specific topic.")
+
+    except ValueError:
+        await ctx.send("Please provide a valid question number. Example: `!question 300`")
     except Exception as e:
         logging.error(f"Error in question command: {e}")
-        await ctx.send("An error occurred while fetching a question. Please try again later.")
+        await ctx.send("An error occurred while fetching the question. Please try again later.")
+
 
 # Add around line 517, before try_again command
 @bot.command()
