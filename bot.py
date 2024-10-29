@@ -1664,7 +1664,7 @@ def check_answer(user_answer, correct_answer):
     string_similarity = SequenceMatcher(None, user_sql, correct_sql).ratio()
     overall_similarity = (structure_similarity + string_similarity) / 2
 
-    is_correct = overall_similarity >= 0.65
+    is_correct = overall_similarity >= 0.5
     feedback = f"Similarity: {overall_similarity:.2%}"
     return is_correct, feedback
 
