@@ -647,6 +647,39 @@ async def report(ctx, question_id: int, *, feedback):
         logging.error(f"Error in report command: {e}")
         await ctx.send("An error occurred while submitting your report. Please try again later.")
 
+# @bot.command()
+# async def topic(ctx, *, topic_name=None):
+#     user_id = ctx.author.id
+#     await user_last_active.set(user_id, datetime.now(timezone.utc))
+#     username = str(ctx.author)
+#     await ensure_user_exists(user_id, username)
+
+#     if topic_name is None:
+#         await list_topics(ctx)
+#         return
+
+#     try:
+#         async with DB_SEMAPHORE:
+#             async with bot.db.acquire() as conn:
+#                 topics = await conn.fetch("SELECT DISTINCT topic FROM questions WHERE topic IS NOT NULL")
+#                 topics = [t['topic'].lower() for t in topics]
+
+#                 best_match = max(topics, key=lambda x: similar(x, topic_name.lower()))
+#                 if similar(best_match, topic_name.lower()) < 0.9:  # 90% accuracy
+#                     await ctx.send(f"No close match found for '{topic_name}'. Here are the available topics:")
+#                     await list_topics(ctx)
+#                     return
+
+#                 question = await get_question(topic=best_match, user_id=user_id)
+#                 if question:
+#                     await user_questions.set(user_id, question)
+#                     await user_attempts.set(user_id, 0)
+#                     await display_question(ctx, question)
+#                 else:
+#                     await ctx.send(f"Sorry, no more questions available for the topic '{best_match.title()}' at the moment.")
+#     except Exception as e:
+#         logging.error(f"Error in topic question command: {e}")
+#         await ctx.send("An error occurred while fetching a question. Please try again later.")
 @bot.command()
 async def topic(ctx, *, topic_name=None):
     user_id = ctx.author.id
@@ -661,24 +694,34 @@ async def topic(ctx, *, topic_name=None):
     try:
         async with DB_SEMAPHORE:
             async with bot.db.acquire() as conn:
-                topics = await conn.fetch("SELECT DISTINCT topic FROM questions WHERE topic IS NOT NULL")
-                topics = [t['topic'].lower() for t in topics]
+                # Get questions where topic contains the search term
+                questions = await conn.fetch("""
+                    SELECT DISTINCT topic 
+                    FROM questions 
+                    WHERE LOWER(topic) LIKE $1
+                    AND id NOT IN (
+                        SELECT question_id 
+                        FROM user_submissions 
+                        WHERE user_id = $2 AND is_correct = true
+                    )
+                """, f"%{topic_name.lower()}%", user_id)
 
-                best_match = max(topics, key=lambda x: similar(x, topic_name.lower()))
-                if similar(best_match, topic_name.lower()) < 0.9:  # 90% accuracy
-                    await ctx.send(f"No close match found for '{topic_name}'. Here are the available topics:")
+                if not questions:
+                    await ctx.send(f"No questions found for topic containing '{topic_name}'. Here are the available topics:")
                     await list_topics(ctx)
                     return
 
-                question = await get_question(topic=best_match, user_id=user_id)
+                # Get a random question from matching topics
+                question = await get_question(topic=random.choice(questions)['topic'], user_id=user_id)
                 if question:
                     await user_questions.set(user_id, question)
                     await user_attempts.set(user_id, 0)
                     await display_question(ctx, question)
                 else:
-                    await ctx.send(f"Sorry, no more questions available for the topic '{best_match.title()}' at the moment.")
+                    await ctx.send(f"Sorry, no new questions available for topics matching '{topic_name}' at the moment.")
+
     except Exception as e:
-        logging.error(f"Error in topic question command: {e}")
+        logging.error(f"Error in topic command: {e}")
         await ctx.send("An error occurred while fetching a question. Please try again later.")
 
 async def list_topics(ctx):
@@ -1652,6 +1695,41 @@ async def weekly_progress(ctx):
                    f"Points earned this week: {weekly_points}\n"
                    f"You're making great strides! 🚀")
 
+# @bot.command()
+# async def company(ctx, *, company_name=None):
+#     user_id = ctx.author.id
+#     await user_last_active.set(user_id, datetime.now(timezone.utc))
+#     username = str(ctx.author)
+#     await ensure_user_exists(user_id, username)
+
+#     if company_name is None:
+#         await list_companies(ctx)
+#         return
+
+#     try:
+#         async with DB_SEMAPHORE:
+#             async with bot.db.acquire() as conn:
+#                 # Get all companies
+#                 companies = await conn.fetch("SELECT DISTINCT company FROM questions WHERE company IS NOT NULL")
+#                 companies = [c['company'].lower() for c in companies]
+
+#                 # Find the best match
+#                 best_match = max(companies, key=lambda x: similar(x, company_name.lower()))
+#                 if similar(best_match, company_name.lower()) < 0.7:
+#                     await ctx.send(f"No close match found for '{company_name}'. Here are the available companies:")
+#                     await list_companies(ctx)
+#                     return
+
+#                 question = await get_question(company=best_match, user_id=user_id)
+#                 if question:
+#                     await user_questions.set(user_id, question)
+#                     await user_attempts.set(user_id, 0)
+#                     await display_question(ctx, question)
+#                 else:
+#                     await ctx.send(f"Sorry, no new questions available for the company '{best_match.title()}' at the moment.")
+#     except Exception as e:
+#         logging.error(f"Error in company question command: {e}")
+#         await ctx.send("An error occurred while fetching a question. Please try again later.")
 @bot.command()
 async def company(ctx, *, company_name=None):
     user_id = ctx.author.id
@@ -1666,24 +1744,32 @@ async def company(ctx, *, company_name=None):
     try:
         async with DB_SEMAPHORE:
             async with bot.db.acquire() as conn:
-                # Get all companies
-                companies = await conn.fetch("SELECT DISTINCT company FROM questions WHERE company IS NOT NULL")
-                companies = [c['company'].lower() for c in companies]
+                # Get questions where company name contains the search term
+                questions = await conn.fetch("""
+                    SELECT DISTINCT company 
+                    FROM questions 
+                    WHERE LOWER(company) LIKE $1
+                    AND id NOT IN (
+                        SELECT question_id 
+                        FROM user_submissions 
+                        WHERE user_id = $2 AND is_correct = true
+                    )
+                """, f"%{company_name.lower()}%", user_id)
 
-                # Find the best match
-                best_match = max(companies, key=lambda x: similar(x, company_name.lower()))
-                if similar(best_match, company_name.lower()) < 0.7:
-                    await ctx.send(f"No close match found for '{company_name}'. Here are the available companies:")
+                if not questions:
+                    await ctx.send(f"No questions found for company containing '{company_name}'. Here are the available companies:")
                     await list_companies(ctx)
                     return
 
-                question = await get_question(company=best_match, user_id=user_id)
+                # Get a random question from matching companies
+                question = await get_question(company=random.choice(questions)['company'], user_id=user_id)
                 if question:
                     await user_questions.set(user_id, question)
                     await user_attempts.set(user_id, 0)
                     await display_question(ctx, question)
                 else:
-                    await ctx.send(f"Sorry, no new questions available for the company '{best_match.title()}' at the moment.")
+                    await ctx.send(f"Sorry, no new questions available for companies matching '{company_name}' at the moment.")
+
     except Exception as e:
         logging.error(f"Error in company question command: {e}")
         await ctx.send("An error occurred while fetching a question. Please try again later.")
