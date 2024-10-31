@@ -2114,7 +2114,7 @@ async def schedule_post(ctx, *, args=None):
         logging.error(f"Error scheduling post: {e}")
         await ctx.send("An error occurred while scheduling the post.")
 
-@tasks.loop(time=time(hour=13, minute=30))  # 7:00 PM IST (13:30 UTC)
+@tasks.loop(time=time(hour=12, minute=0))  # 7:00 PM IST (13:30 UTC)
 async def check_scheduled_posts():
     try:
         async with bot.db.acquire() as conn:
