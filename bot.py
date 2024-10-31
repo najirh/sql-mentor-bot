@@ -1455,26 +1455,72 @@ async def my_achievements(ctx):
                        "Keep practicing, and soon you'll be swimming in achievements! 🏊‍♂️🏆")
 
 # Call this function after each question submission
+# async def update_user_achievements(ctx, user_id):
+#     try:
+#         new_achievements, _ = await check_achievements(user_id)
+#         if new_achievements:
+#             user = await bot.fetch_user(user_id)
+#             achievement_message = f"🎉 Congratulations to {user.name}! They've earned new achievements: {', '.join(new_achievements)}"
+            
+#             # Send to the user
+#             await ctx.send(f"Congratulations! You've earned new achievements: {', '.join(new_achievements)}")
+            
+#             # Send to the specified bot channels
+#             for channel_id in CHANNEL_IDS:
+#                 channel = bot.get_channel(channel_id)
+#                 if channel:
+#                     await channel.send(achievement_message)
+#                 else:
+#                     logging.warning(f"Channel with ID {channel_id} not found")
+#     except Exception as e:
+#         logging.error(f"Error in update_user_achievements: {e}")
+#         # Don't send an error message to the user for this internal error
+
 async def update_user_achievements(ctx, user_id):
     try:
-        new_achievements, _ = await check_achievements(user_id)
+        new_achievements, all_achievements = await check_achievements(user_id)
         if new_achievements:
             user = await bot.fetch_user(user_id)
-            achievement_message = f"🎉 Congratulations to {user.name}! They've earned new achievements: {', '.join(new_achievements)}"
             
-            # Send to the user
-            await ctx.send(f"Congratulations! You've earned new achievements: {', '.join(new_achievements)}")
+            # Create a more engaging achievement message
+            achievement_messages = {
+                "🎓 Beginner": "has taken their first steps in SQL mastery!",
+                "🏅 Intermediate": "is climbing the SQL ranks!",
+                "🏆 Expert": "has become a SQL virtuoso!",
+                "🎯 Sharpshooter": "is hitting SQL queries with incredible accuracy!",
+                "👑 SQL Master": "has ascended to SQL royalty!"
+            }
             
-            # Send to the specified bot channels
-            for channel_id in CHANNEL_IDS:
-                channel = bot.get_channel(channel_id)
-                if channel:
-                    await channel.send(achievement_message)
-                else:
-                    logging.warning(f"Channel with ID {channel_id} not found")
+            for achievement in new_achievements:
+                # Personal message to the user
+                personal_msg = (
+                    f"🎉 **Achievement Unlocked: {achievement}**!\n"
+                    f"Keep pushing your limits! 💪"
+                )
+                await ctx.send(personal_msg)
+                
+                # Channel announcement with congratulatory message
+                channel_msg = (
+                    f"🌟 **New Achievement Alert!** 🌟\n\n"
+                    f"**{user.name}** {achievement_messages.get(achievement, 'has earned a new achievement!')}\n"
+                    f"Achievement: **{achievement}**\n\n"
+                    f"Give them a round of applause! 👏\n"
+                    f"Who will be next to join the ranks? 🤔"
+                )
+                
+                # Send to the specified bot channels
+                for channel_id in CHANNEL_IDS:
+                    channel = bot.get_channel(channel_id)
+                    if channel:
+                        await channel.send(channel_msg)
+                    else:
+                        logging.warning(f"Channel with ID {channel_id} not found")
+
     except Exception as e:
         logging.error(f"Error in update_user_achievements: {e}")
         # Don't send an error message to the user for this internal error
+
+
 
 async def ensure_tables_exist():
     try:
@@ -1743,6 +1789,29 @@ async def submit_question(ctx, *, question):
         logging.error(f"Error in submit_question command: {e}")
         await ctx.send("An error occurred while submitting your question. Please try again later.")
 
+# @bot.command()
+# async def daily_progress(ctx):
+#     user_id = ctx.author.id
+#     await user_last_active.set(user_id, datetime.now(timezone.utc))
+#     today = get_ist_time().date()
+    
+#     async with DB_SEMAPHORE:
+#         async with bot.db.acquire() as conn:
+#             daily_points = await conn.fetchval('''
+#                 SELECT COALESCE(SUM(points), 0)
+#                 FROM user_submissions
+#                 WHERE user_id = $1 AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
+#             ''', user_id, today)
+#             daily_submissions = await conn.fetchval('''
+#                 SELECT COUNT(*)
+#                 FROM user_submissions
+#                 WHERE user_id = $1 AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
+#             ''', user_id, today)
+    
+#     await ctx.send(f"📊 Your Daily Progress 📊\n"
+#                    f"Points earned today: {daily_points}\n"
+#                    f"Questions attempted: {daily_submissions}\n"
+#                    f"Keep up the great work! 💪")
 @bot.command()
 async def daily_progress(ctx):
     user_id = ctx.author.id
@@ -1751,21 +1820,51 @@ async def daily_progress(ctx):
     
     async with DB_SEMAPHORE:
         async with bot.db.acquire() as conn:
-            daily_points = await conn.fetchval('''
-                SELECT COALESCE(SUM(points), 0)
+            # Get detailed daily statistics
+            daily_stats = await conn.fetchrow('''
+                SELECT 
+                    COUNT(*) as total_attempts,
+                    SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as correct_answers,
+                    COALESCE(SUM(points), 0) as total_points,
+                    COUNT(DISTINCT question_id) as unique_questions
                 FROM user_submissions
-                WHERE user_id = $1 AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
+                WHERE user_id = $1 
+                AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
             ''', user_id, today)
-            daily_submissions = await conn.fetchval('''
-                SELECT COUNT(*)
-                FROM user_submissions
-                WHERE user_id = $1 AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
-            ''', user_id, today)
+            
+            # Get streak information
+            streak = await get_user_streak(user_id)
     
-    await ctx.send(f"📊 Your Daily Progress 📊\n"
-                   f"Points earned today: {daily_points}\n"
-                   f"Questions attempted: {daily_submissions}\n"
-                   f"Keep up the great work! 💪")
+    if daily_stats['total_attempts'] > 0:
+        success_rate = (daily_stats['correct_answers'] / daily_stats['total_attempts']) * 100
+        message = (
+            "🎯 **Your Daily SQL Progress Report** 🎯\n\n"
+            f"📊 **Today's Activity**\n"
+            f"• Questions Attempted: {daily_stats['unique_questions']} unique questions\n"
+            f"• Total Submissions: {daily_stats['total_attempts']} attempts\n"
+            f"• Correct Answers: {daily_stats['correct_answers']} ✅\n"
+            f"• Success Rate: {success_rate:.1f}% 📈\n"
+            f"• Points Earned: {daily_stats['total_points']} 💰\n"
+            f"• Current Streak: {streak} 🔥\n\n"
+            f"Daily Limit Status:\n"
+            f"• Attempts Left: {max(10 - daily_stats['total_attempts'], 0)} of 10 ⏳\n"
+            f"• Points Buffer: {max(-50 - daily_stats['total_points'], 0)} of -50 🛡️\n\n"
+            "Keep pushing forward! Every query makes you stronger! 💪\n"
+            "Use `!sql` to continue your learning journey! 🚀"
+        )
+    else:
+        message = (
+            "🌟 **Start Your Daily SQL Journey!** 🌟\n\n"
+            "You haven't attempted any questions today yet!\n"
+            "• Daily Attempts Available: 10 ⏳\n"
+            "• Points Buffer: 50 🛡️\n"
+            "• Current Streak: {streak} 🔥\n\n"
+            "Ready to begin? Use `!sql` to get your first question! 💪\n"
+            "Remember: Consistency is key to mastery! 🔑"
+        )
+
+    await ctx.send(message)
+
 
 @bot.command()
 async def weekly_progress(ctx):
