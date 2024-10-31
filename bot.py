@@ -2020,7 +2020,7 @@ async def admin(ctx):
        Description: Displays overall bot usage statistics.
 
     5. `!schedule_post`
-        Usage: `!schedule_post` '2024-10-26 22:00:00' This is a scheduled message"
+        Usage: `!schedule_post` `2024-10-26 22:00:00` (in IST) This is a scheduled message"
 
     Remember, with great power comes great responsibility. Use these commands wisely!
     """
