@@ -2003,21 +2003,24 @@ async def admin(ctx):
 
     Here are the available admin commands:
 
-    1. !update_leaderboards
+    1. `!update_leaderboards`
        Usage: !update_leaderboards
        Description: Manually triggers an update of the leaderboards.
 
-    2. !post_monthly_leaderboard
+    2. `!post_monthly_leaderboard`
        Usage: !post_monthly_leaderboard
        Description: Manually posts the monthly leaderboard.
 
-    3. !view_reports
+    3. `!view_reports`
        Usage: !view_reports [limit]
        Description: Views recent question reports. Optionally specify a limit (default 10).
 
-    4. !view_stats
+    4. `!view_stats`
        Usage: !view_stats
        Description: Displays overall bot usage statistics.
+
+    5. `!schedule_post`
+        Usage: `!schedule_post` '2024-10-26 22:00:00' This is a scheduled message"
 
     Remember, with great power comes great responsibility. Use these commands wisely!
     """
