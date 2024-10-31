@@ -344,18 +344,36 @@ async def sql_error(ctx, error):
         logging.error(f"Unhandled error in sql command: {error}")
         # No need to send an error message to the user here
 
+# @bot.command()
+# async def submit(ctx, *, answer):
+#     user_id = ctx.author.id
+#     await user_last_active.set(user_id, datetime.now(timezone.utc))
+#     question = await user_questions.get(user_id)
+#     if question:
+#         # Remove this line as we're double-counting attempts
+#         # current_attempts = await user_attempts.get(user_id, 0)
+#         # await user_attempts.set(user_id, current_attempts + 1)  # Remove this
+#         await process_answer(ctx, user_id, answer)
+#     else:
+#         await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
+
 @bot.command()
 async def submit(ctx, *, answer):
     user_id = ctx.author.id
     await user_last_active.set(user_id, datetime.now(timezone.utc))
     question = await user_questions.get(user_id)
+    
     if question:
-        # Remove this line as we're double-counting attempts
-        # current_attempts = await user_attempts.get(user_id, 0)
-        # await user_attempts.set(user_id, current_attempts + 1)  # Remove this
         await process_answer(ctx, user_id, answer)
     else:
-        await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
+        username = ctx.author.name  # Get the user's name
+        await ctx.send(f"Hey {username}! 👋 Looks like you don't have an active question to answer.\n"
+                      f"Use `!sql` to get a new question and start practicing! 💪\n"
+                      f"You can also try:\n"
+                      f"• `!topic <topic>` - Get a question on a specific topic\n"
+                      f"• `!company <company>` - Practice company-specific questions\n"
+                      f"• `!question <id>` - Try a specific question by ID")
+
 
 async def process_answer(ctx, user_id, answer):
     question = await user_questions.get(user_id)
@@ -1128,14 +1146,34 @@ logger = setup_logging()
 
 # Then use logger.info(), logger.error(), etc. instead of print() throughout your code
 
+# async def question_timer(ctx, question_id, time_limit):
+#     await asyncio.sleep(time_limit * 60)  # Convert minutes to seconds
+#     user_id = ctx.author.id
+#     current_question = await user_questions.get(user_id)
+#     if current_question and current_question['id'] == question_id:
+#         await ctx.send(f"⏰ Time's up! The question (ID: {question_id}) has expired. Use `!sql` to get a new question.")
+#         await user_questions.pop(user_id, None)
+#         await user_attempts.pop(user_id, None)
 async def question_timer(ctx, question_id, time_limit):
     await asyncio.sleep(time_limit * 60)  # Convert minutes to seconds
     user_id = ctx.author.id
     current_question = await user_questions.get(user_id)
+    
     if current_question and current_question['id'] == question_id:
-        await ctx.send(f"⏰ Time's up! The question (ID: {question_id}) has expired. Use `!sql` to get a new question.")
+        # Get user's name
+        username = str(ctx.author.name)  # Get the user's Discord name
+        
+        # Check if it's a challenge question
+        if not current_question.get('is_challenge'):  # Only for regular questions
+            await ctx.send(f"⏰ Hey {username}, your time's up! The question (ID: {question_id}) has expired. Use `!sql` to get a new question.")
+        else:
+            # Keep the original message for challenge questions
+            await ctx.send(f"⏰ Time's up! The question (ID: {question_id}) has expired. Use `!sql` to get a new question.")
+        
+        # Clean up the expired question
         await user_questions.pop(user_id, None)
         await user_attempts.pop(user_id, None)
+
 
 async def get_challenge_questions(num_questions=5):
     async with DB_SEMAPHORE:
