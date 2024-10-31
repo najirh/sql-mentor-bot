@@ -2074,6 +2074,46 @@ async def update_all_scores(user_id, question_id, is_correct, points):
         logging.error(f"Error updating all scores: {e}")
         raise
 
+# @bot.command()
+# async def schedule_post(ctx, *, args=None):
+#     if ctx.author.id not in ADMIN_IDS:
+#         await ctx.send("You don't have permission to use this command.")
+#         return
+
+#     if not args:
+#         usage = (
+#             "Usage: !schedule_post <timestamp> <message>\n"
+#             "Timestamp format: 'YYYY-MM-DD HH:MM:SS' (in IST)\n"
+#             "Example: !schedule_post '2024-10-26 22:00:00' This is a scheduled message"
+#         )
+#         await ctx.send(usage)
+#         return
+
+#     try:
+#         # Split the args into timestamp and message
+#         timestamp_str, message = args.split(maxsplit=1)
+        
+#         # Parse the timestamp
+#         timestamp = datetime.strptime(timestamp_str.strip("'"), '%Y-%m-%d %H:%M:%S')
+        
+#         # Convert to IST
+#         ist = pytz.timezone('Asia/Kolkata')
+#         timestamp = ist.localize(timestamp)
+        
+#         # Store in the database
+#         async with bot.db.acquire() as conn:
+#             await conn.execute('''
+#                 INSERT INTO scheduled_posts (timestamp, message)
+#                 VALUES ($1, $2)
+#             ''', timestamp, message)
+        
+#         await ctx.send(f"Post scheduled for {timestamp_str} IST")
+#     except ValueError:
+#         await ctx.send("Invalid timestamp format. Use 'YYYY-MM-DD HH:MM:SS'")
+#     except Exception as e:
+#         logging.error(f"Error scheduling post: {e}")
+#         await ctx.send("An error occurred while scheduling the post.")
+
 @bot.command()
 async def schedule_post(ctx, *, args=None):
     if ctx.author.id not in ADMIN_IDS:
@@ -2083,18 +2123,28 @@ async def schedule_post(ctx, *, args=None):
     if not args:
         usage = (
             "Usage: !schedule_post <timestamp> <message>\n"
-            "Timestamp format: 'YYYY-MM-DD HH:MM:SS' (in IST)\n"
-            "Example: !schedule_post '2024-10-26 22:00:00' This is a scheduled message"
+            "Timestamp format: YYYY-MM-DD HH:MM:SS (no quotes needed)\n"
+            "Example: !schedule_post 2024-10-31 15:00:00 Happy Diwali message..."
         )
         await ctx.send(usage)
         return
 
     try:
-        # Split the args into timestamp and message
-        timestamp_str, message = args.split(maxsplit=1)
+        # Extract timestamp (first 19 characters in YYYY-MM-DD HH:MM:SS format)
+        parts = args.split(' ', maxsplit=2)
+        if len(parts) < 3:
+            await ctx.send("Please provide both timestamp and message.")
+            return
+            
+        date_part, time_part, message = parts
+        timestamp_str = f"{date_part} {time_part}"
         
         # Parse the timestamp
-        timestamp = datetime.strptime(timestamp_str.strip("'"), '%Y-%m-%d %H:%M:%S')
+        try:
+            timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            await ctx.send("Invalid timestamp format. Use: YYYY-MM-DD HH:MM:SS")
+            return
         
         # Convert to IST
         ist = pytz.timezone('Asia/Kolkata')
@@ -2107,12 +2157,13 @@ async def schedule_post(ctx, *, args=None):
                 VALUES ($1, $2)
             ''', timestamp, message)
         
-        await ctx.send(f"Post scheduled for {timestamp_str} IST")
-    except ValueError:
-        await ctx.send("Invalid timestamp format. Use 'YYYY-MM-DD HH:MM:SS'")
+        formatted_time = timestamp.strftime('%Y-%m-%d %H:%M:%S')
+        await ctx.send(f"✅ Post successfully scheduled for {formatted_time} IST")
+        
     except Exception as e:
         logging.error(f"Error scheduling post: {e}")
-        await ctx.send("An error occurred while scheduling the post.")
+        await ctx.send("An error occurred while scheduling the post. Please check the format and try again.")
+
 
 @tasks.loop(time=time(hour=12, minute=0))  # 7:00 PM IST (13:30 UTC)
 async def check_scheduled_posts():
