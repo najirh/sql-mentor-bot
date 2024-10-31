@@ -1371,10 +1371,10 @@ async def check_achievements(user_id):
                 
                 achievement_criteria = [
                     ("🎓 Beginner", stats['total_answers'] >= 10),
-                    ("🏅 Intermediate", stats['total_answers'] >= 100),
-                    ("🏆 Expert", stats['total_answers'] >= 1000),
+                    ("🏅 Intermediate", stats['total_answers'] >= 25),
+                    ("🏆 Expert", stats['total_answers'] >= 250),
                     (" Sharpshooter", stats['correct_answers'] >= 50),
-                    ("👑 SQL Master", stats['correct_answers'] >= 500)
+                    ("👑 SQL Master", stats['correct_answers'] >= 100)
                 ]
                 
                 for achievement, condition in achievement_criteria:
