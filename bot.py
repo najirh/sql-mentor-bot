@@ -1653,7 +1653,7 @@ async def daily_progress(ctx):
             f"• Points Earned: {daily_stats['total_points']} 💰\n"
             f"• Current Streak: {streak} 🔥\n\n"
             f"Daily Limit Status:\n"
-            f"• Attempts Left: {max(10 - daily_stats['total_attempts'], 0)} of 10 ⏳\n"
+            f"• Attempts Left: {max(25 - daily_stats['total_attempts'], 0)} of 25 ⏳\n"
             f"• Points Buffer: {max(-50 - daily_stats['total_points'], 0)} of -50 🛡️\n\n"
             "Keep pushing forward! Every query makes you stronger! 💪\n"
             "Use `!sql` to continue your learning journey! 🚀"
