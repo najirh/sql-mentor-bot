@@ -27,7 +27,6 @@ async def setup():
     challenge_time_over.start()
     update_weekly_heroes.start()
     check_scheduled_posts.start()
-    # Any other initialization tasks...
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -54,7 +53,7 @@ class ThreadSafeDict:
         async with self._lock:
             return key in self._dict
 
-# Replace your global dictionaries with these thread-safe versions
+#Global Dictionaries
 user_questions = ThreadSafeDict()
 user_attempts = ThreadSafeDict()
 user_skips = ThreadSafeDict()
@@ -62,15 +61,12 @@ user_last_active = ThreadSafeDict()
 
 CHANNEL_IDS = [int(id.strip()) for id in os.getenv('CHANNEL_ID', '').split(',') if id.strip()]
 
-DB_SEMAPHORE = asyncio.Semaphore(10)  # Increase from 5 to 10 or higher if needed
+DB_SEMAPHORE = asyncio.Semaphore(10)  
 
-# Add these near the top of your file, with other global variables
 user_timers = {}
 
-# Add this near the top of your file with other global variables
 ADMIN_IDS = [1235457227733864469]  # Admin user ID
 
-# Add around line 73
 def get_ist_time():
     """Get current time in IST"""
     return datetime.now(pytz.UTC).astimezone(pytz.timezone('Asia/Kolkata'))
@@ -273,7 +269,6 @@ async def display_question(ctx, question):
 
     await ctx.send(message)
     
-    # Start the timer
     if user_id in user_timers:
         user_timers[user_id].cancel()
     user_timers[user_id] = asyncio.create_task(question_timer(ctx, question['id'], time_limit))
@@ -283,7 +278,7 @@ async def check_daily_limit(ctx, user_id):
     daily_points = await get_daily_points(user_id, today)
     daily_submissions = await get_daily_submissions(user_id, today)
     logging.info(f"User {user_id} daily points: {daily_points}, daily submissions: {daily_submissions}")
-    if daily_points <= -50 or daily_submissions >= 10:
+    if daily_points <= -50 or daily_submissions >= 25:
         await ctx.send("You've reached the daily limit. Please try again tomorrow! 🌙")
         return False
     return True
@@ -342,20 +337,6 @@ async def sql_error(ctx, error):
         await ctx.send(f"Whoa there, eager learner! You can try another question in {error.retry_after:.2f} seconds. Take a moment to review your last query or check out your stats with `!my_stats`.")
     else:
         logging.error(f"Unhandled error in sql command: {error}")
-        # No need to send an error message to the user here
-
-# @bot.command()
-# async def submit(ctx, *, answer):
-#     user_id = ctx.author.id
-#     await user_last_active.set(user_id, datetime.now(timezone.utc))
-#     question = await user_questions.get(user_id)
-#     if question:
-#         # Remove this line as we're double-counting attempts
-#         # current_attempts = await user_attempts.get(user_id, 0)
-#         # await user_attempts.set(user_id, current_attempts + 1)  # Remove this
-#         await process_answer(ctx, user_id, answer)
-#     else:
-#         await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
 
 @bot.command()
 async def submit(ctx, *, answer):
@@ -516,83 +497,6 @@ async def get_difficulty_question(ctx, difficulty):
         logging.error(f"Error in {difficulty} command: {e}")
         await ctx.send("An error occurred while fetching a question. Please try again later.")
 
-# @bot.command()
-# async def question(ctx):
-#     user_id = ctx.author.id
-#     await user_last_active.set(user_id, datetime.now(timezone.utc))
-#     username = str(ctx.author)
-#     await ensure_user_exists(user_id, username)
-
-#     try:
-#         async with DB_SEMAPHORE:
-#             async with bot.db.acquire() as conn:
-#                 preference = await conn.fetchval('''
-#                     SELECT preferred_difficulty FROM user_preferences
-#                     WHERE user_id = $1
-#                 ''', user_id)
-        
-#         question = await get_question(difficulty=preference, user_id=user_id)
-#         if question:
-#             await user_questions.set(user_id, question)
-#             await user_attempts.set(user_id, 0)
-#             await display_question(ctx, question)
-#         else:
-#             await ctx.send("Sorry, no new questions available at your preferred difficulty. Try `!reset_preference` to see questions from all difficulties, or use `!topic <topic>` to try a specific topic.")
-#     except Exception as e:
-#         logging.error(f"Error in question command: {e}")
-#         await ctx.send("An error occurred while fetching a question. Please try again later.")
-
-# @bot.command()
-# async def question(ctx, question_id: int = None):
-#     user_id = ctx.author.id
-#     await user_last_active.set(user_id, datetime.now(timezone.utc))
-#     username = str(ctx.author)
-#     await ensure_user_exists(user_id, username)
-
-#     try:
-#         # Check daily limit (maintains existing functionality)
-#         if not await check_daily_limit(ctx, user_id):
-#             return
-
-#         if question_id:
-#             async with DB_SEMAPHORE:
-#                 async with bot.db.acquire() as conn:
-#                     # Get the specific question
-#                     question = await conn.fetchrow('''
-#                         SELECT * FROM questions WHERE id = $1
-#                         AND id NOT IN (
-#                             SELECT question_id FROM user_submissions 
-#                             WHERE user_id = $2 AND is_correct = true
-#                         )
-#                     ''', question_id, user_id)
-                    
-#                     if not question:
-#                         await ctx.send(f"❌ Question {question_id} is either not found or you've already solved it. Try another question!")
-#                         return
-#         else:
-#             # Original logic for random question based on preference
-#             async with DB_SEMAPHORE:
-#                 async with bot.db.acquire() as conn:
-#                     preference = await conn.fetchval('''
-#                         SELECT preferred_difficulty FROM user_preferences
-#                         WHERE user_id = $1
-#                     ''', user_id)
-            
-#             question = await get_question(difficulty=preference, user_id=user_id)
-
-#         if question:
-#             # These lines maintain compatibility with hint, try_again, and other functions
-#             await user_questions.set(user_id, question)
-#             await user_attempts.set(user_id, 0)
-#             await display_question(ctx, question)
-#         else:
-#             await ctx.send("Sorry, no new questions available at your preferred difficulty. Try `!reset_preference` to see questions from all difficulties, or use `!topic <topic>` to try a specific topic.")
-
-#     except ValueError:
-#         await ctx.send("Please provide a valid question number. Example: `!question 300`")
-#     except Exception as e:
-#         logging.error(f"Error in question command: {e}")
-#         await ctx.send("An error occurred while fetching the question. Please try again later.")
 @bot.command()
 async def question(ctx, question_id: int = None):
     user_id = ctx.author.id
@@ -647,7 +551,6 @@ async def question(ctx, question_id: int = None):
         logging.error(f"Error in question command: {e}")
         await ctx.send("An error occurred while fetching the question. Please try again later.")
 
-# Add around line 517, before try_again command
 @bot.command()
 @commands.cooldown(1, 30, commands.BucketType.user)  # One hint every 30 seconds
 async def hint(ctx):
@@ -717,39 +620,6 @@ async def report(ctx, question_id: int, *, feedback):
         logging.error(f"Error in report command: {e}")
         await ctx.send("An error occurred while submitting your report. Please try again later.")
 
-# @bot.command()
-# async def topic(ctx, *, topic_name=None):
-#     user_id = ctx.author.id
-#     await user_last_active.set(user_id, datetime.now(timezone.utc))
-#     username = str(ctx.author)
-#     await ensure_user_exists(user_id, username)
-
-#     if topic_name is None:
-#         await list_topics(ctx)
-#         return
-
-#     try:
-#         async with DB_SEMAPHORE:
-#             async with bot.db.acquire() as conn:
-#                 topics = await conn.fetch("SELECT DISTINCT topic FROM questions WHERE topic IS NOT NULL")
-#                 topics = [t['topic'].lower() for t in topics]
-
-#                 best_match = max(topics, key=lambda x: similar(x, topic_name.lower()))
-#                 if similar(best_match, topic_name.lower()) < 0.9:  # 90% accuracy
-#                     await ctx.send(f"No close match found for '{topic_name}'. Here are the available topics:")
-#                     await list_topics(ctx)
-#                     return
-
-#                 question = await get_question(topic=best_match, user_id=user_id)
-#                 if question:
-#                     await user_questions.set(user_id, question)
-#                     await user_attempts.set(user_id, 0)
-#                     await display_question(ctx, question)
-#                 else:
-#                     await ctx.send(f"Sorry, no more questions available for the topic '{best_match.title()}' at the moment.")
-#     except Exception as e:
-#         logging.error(f"Error in topic question command: {e}")
-#         await ctx.send("An error occurred while fetching a question. Please try again later.")
 @bot.command()
 async def topic(ctx, *, topic_name=None):
     user_id = ctx.author.id
@@ -893,11 +763,6 @@ async def daily_challenge():
 async def before_daily_challenge():
     await bot.wait_until_ready()
 
-
-# @challenge_time_over.before_loop
-# async def before_challenge_time_over():
-#     await bot.wait_until_ready()
-
 async def is_challenge_active():
     try:
         current_challenge = await get_current_challenge()
@@ -905,7 +770,6 @@ async def is_challenge_active():
             logging.info("No active challenge found")
             return False
             
-        # Fix timezone handling
         now = datetime.now(pytz.UTC)
         end_time = current_challenge['end_time'].replace(tzinfo=pytz.UTC)
         
@@ -942,7 +806,6 @@ async def get_fresh_challenge_question():
         logging.error(f"Error getting fresh challenge question: {e}")
         return None
 
-# Fix this function
 async def set_current_challenge(question_id, end_time):
     try:
         async with DB_SEMAPHORE:
@@ -1059,7 +922,6 @@ async def challenge_time_over():
                         incorrect_submissions.append(f"❌ {sub['username']} (-20 points)")
                         await update_user_stats(sub['user_id'], question['id'], False, -20)
 
-                # Add submissions to message
                 if correct_submissions:
                     challenge_over_message += "**🎉 CORRECT SUBMISSIONS:**\n" + "\n".join(correct_submissions) + "\n"
                 else:
@@ -1101,8 +963,6 @@ async def get_current_challenge():
         logging.error(f"Error getting current challenge: {e}")
         return None
 
-# async def clear_current_challenge():
-#     await bot.db.execute('DELETE FROM current_challenge')
 async def clear_current_challenge():
     try:
         async with DB_SEMAPHORE:
@@ -1144,16 +1004,6 @@ def setup_logging():
 
 logger = setup_logging()
 
-# Then use logger.info(), logger.error(), etc. instead of print() throughout your code
-
-# async def question_timer(ctx, question_id, time_limit):
-#     await asyncio.sleep(time_limit * 60)  # Convert minutes to seconds
-#     user_id = ctx.author.id
-#     current_question = await user_questions.get(user_id)
-#     if current_question and current_question['id'] == question_id:
-#         await ctx.send(f"⏰ Time's up! The question (ID: {question_id}) has expired. Use `!sql` to get a new question.")
-#         await user_questions.pop(user_id, None)
-#         await user_attempts.pop(user_id, None)
 async def question_timer(ctx, question_id, time_limit):
     await asyncio.sleep(time_limit * 60)  # Convert minutes to seconds
     user_id = ctx.author.id
@@ -1453,28 +1303,6 @@ async def my_achievements(ctx):
                        "You haven't earned any achievements yet, but fear not!\n"
                        "Every query brings you closer to SQL greatness.\n"
                        "Keep practicing, and soon you'll be swimming in achievements! 🏊‍♂️🏆")
-
-# Call this function after each question submission
-# async def update_user_achievements(ctx, user_id):
-#     try:
-#         new_achievements, _ = await check_achievements(user_id)
-#         if new_achievements:
-#             user = await bot.fetch_user(user_id)
-#             achievement_message = f"🎉 Congratulations to {user.name}! They've earned new achievements: {', '.join(new_achievements)}"
-            
-#             # Send to the user
-#             await ctx.send(f"Congratulations! You've earned new achievements: {', '.join(new_achievements)}")
-            
-#             # Send to the specified bot channels
-#             for channel_id in CHANNEL_IDS:
-#                 channel = bot.get_channel(channel_id)
-#                 if channel:
-#                     await channel.send(achievement_message)
-#                 else:
-#                     logging.warning(f"Channel with ID {channel_id} not found")
-#     except Exception as e:
-#         logging.error(f"Error in update_user_achievements: {e}")
-#         # Don't send an error message to the user for this internal error
 
 async def update_user_achievements(ctx, user_id):
     try:
@@ -1789,29 +1617,7 @@ async def submit_question(ctx, *, question):
         logging.error(f"Error in submit_question command: {e}")
         await ctx.send("An error occurred while submitting your question. Please try again later.")
 
-# @bot.command()
-# async def daily_progress(ctx):
-#     user_id = ctx.author.id
-#     await user_last_active.set(user_id, datetime.now(timezone.utc))
-#     today = get_ist_time().date()
-    
-#     async with DB_SEMAPHORE:
-#         async with bot.db.acquire() as conn:
-#             daily_points = await conn.fetchval('''
-#                 SELECT COALESCE(SUM(points), 0)
-#                 FROM user_submissions
-#                 WHERE user_id = $1 AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
-#             ''', user_id, today)
-#             daily_submissions = await conn.fetchval('''
-#                 SELECT COUNT(*)
-#                 FROM user_submissions
-#                 WHERE user_id = $1 AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
-#             ''', user_id, today)
-    
-#     await ctx.send(f"📊 Your Daily Progress 📊\n"
-#                    f"Points earned today: {daily_points}\n"
-#                    f"Questions attempted: {daily_submissions}\n"
-#                    f"Keep up the great work! 💪")
+
 @bot.command()
 async def daily_progress(ctx):
     user_id = ctx.author.id
@@ -1883,133 +1689,6 @@ async def weekly_progress(ctx):
     await ctx.send(f"🗓️ Your Weekly Progress 🗓️\n"
                    f"Points earned this week: {weekly_points}\n"
                    f"You're making great strides! 🚀")
-
-# @bot.command()
-# async def company(ctx, *, company_name=None):
-#     user_id = ctx.author.id
-#     await user_last_active.set(user_id, datetime.now(timezone.utc))
-#     username = str(ctx.author)
-#     await ensure_user_exists(user_id, username)
-
-#     if company_name is None:
-#         await list_companies(ctx)
-#         return
-
-#     try:
-#         async with DB_SEMAPHORE:
-#             async with bot.db.acquire() as conn:
-#                 # Get all companies
-#                 companies = await conn.fetch("SELECT DISTINCT company FROM questions WHERE company IS NOT NULL")
-#                 companies = [c['company'].lower() for c in companies]
-
-#                 # Find the best match
-#                 best_match = max(companies, key=lambda x: similar(x, company_name.lower()))
-#                 if similar(best_match, company_name.lower()) < 0.7:
-#                     await ctx.send(f"No close match found for '{company_name}'. Here are the available companies:")
-#                     await list_companies(ctx)
-#                     return
-
-#                 question = await get_question(company=best_match, user_id=user_id)
-#                 if question:
-#                     await user_questions.set(user_id, question)
-#                     await user_attempts.set(user_id, 0)
-#                     await display_question(ctx, question)
-#                 else:
-#                     await ctx.send(f"Sorry, no new questions available for the company '{best_match.title()}' at the moment.")
-#     except Exception as e:
-#         logging.error(f"Error in company question command: {e}")
-#         await ctx.send("An error occurred while fetching a question. Please try again later.")
-# @bot.command()
-# async def company(ctx, *, company_name=None):
-#     user_id = ctx.author.id
-#     await user_last_active.set(user_id, datetime.now(timezone.utc))
-#     username = str(ctx.author)
-#     await ensure_user_exists(user_id, username)
-
-#     if company_name is None:
-#         await list_companies(ctx)
-#         return
-
-#     try:
-#         async with DB_SEMAPHORE:
-#             async with bot.db.acquire() as conn:
-#                 # Get questions where company name contains the search term
-#                 questions = await conn.fetch("""
-#                     SELECT DISTINCT company 
-#                     FROM questions 
-#                     WHERE LOWER(company) LIKE $1
-#                     AND id NOT IN (
-#                         SELECT question_id 
-#                         FROM user_submissions 
-#                         WHERE user_id = $2 AND is_correct = true
-#                     )
-#                 """, f"%{company_name.lower()}%", user_id)
-
-#                 if not questions:
-#                     await ctx.send(f"No questions found for company containing '{company_name}'. Here are the available companies:")
-#                     await list_companies(ctx)
-#                     return
-
-#                 # Get a random question from matching companies
-#                 question = await get_question(company=random.choice(questions)['company'], user_id=user_id)
-#                 if question:
-#                     await user_questions.set(user_id, question)
-#                     await user_attempts.set(user_id, 0)
-#                     await display_question(ctx, question)
-#                 else:
-#                     await ctx.send(f"Sorry, no new questions available for companies matching '{company_name}' at the moment.")
-
-#     except Exception as e:
-#         logging.error(f"Error in company question command: {e}")
-#         await ctx.send("An error occurred while fetching a question. Please try again later.")
-
-# @bot.command()
-# async def company(ctx, *, company_name=None):
-#     user_id = ctx.author.id
-#     await user_last_active.set(user_id, datetime.now(timezone.utc))
-#     username = str(ctx.author)
-#     await ensure_user_exists(user_id, username)
-
-#     if company_name is None:
-#         await list_companies(ctx)
-#         return
-
-#     try:
-#         async with DB_SEMAPHORE:
-#             async with bot.db.acquire() as conn:
-#                 # Get questions where company name contains the search term
-#                 questions = await conn.fetch("""
-#                     SELECT DISTINCT q.* 
-#                     FROM questions q
-#                     WHERE LOWER(company) LIKE $1
-#                     AND q.id NOT IN (
-#                         SELECT question_id 
-#                         FROM user_submissions 
-#                         WHERE user_id = $2 AND is_correct = true
-#                     )
-#                 """, f"%{company_name.lower()}%", user_id)
-
-#                 if not questions:
-#                     await ctx.send(f"No questions found for company containing '{company_name}'. Here are the available companies:")
-#                     await list_companies(ctx)
-#                     return
-
-#                 # Get a random question from matching questions
-#                 question = random.choice(questions)
-#                 if question:
-#                     # Ensure difficulty is set
-#                     if not question.get('difficulty'):
-#                         question['difficulty'] = 'medium'  # Default to medium if not set
-                        
-#                     await user_questions.set(user_id, question)
-#                     await user_attempts.set(user_id, 0)
-#                     await display_question(ctx, question)
-#                 else:
-#                     await ctx.send(f"Sorry, no new questions available for companies matching '{company_name}' at the moment.")
-
-#     except Exception as e:
-#         logging.error(f"Error in company question command: {e}")
-#         await ctx.send("An error occurred while fetching a question. Please try again later.")
 
 @bot.command()
 async def company(ctx, *, company_name=None):
@@ -2145,8 +1824,7 @@ async def get_user_lock(user_id):
 # Use the lock in critical sections, e.g.:
 async def update_user_data(user_id, data):
     async with await get_user_lock(user_id):
-        # Update user data here
-        pass  # Replace this with actual update logic
+        pass  
 
 async def setup():
     required_vars = ['DATABASE_URL', 'DISCORD_TOKEN', 'CHANNEL_ID']
@@ -2171,7 +1849,6 @@ async def db_operation(operation, *args):
         except Exception as e:
             logging.error(f"Database operation error: {e}")
             raise
-# -- updated code
 async def update_user_stats(user_id, question_id, is_correct, points):
     try:
         async with DB_SEMAPHORE:
@@ -2181,10 +1858,8 @@ async def update_user_stats(user_id, question_id, is_correct, points):
                     VALUES ($1, $2, $3, $4)
                 ''', user_id, question_id, is_correct, points)
         
-        # Update weekly points
         await update_weekly_points(user_id, points)
         
-        # Update daily points
         today = get_ist_time().date()
         await update_daily_points(user_id, today, points)
         
@@ -2490,9 +2165,6 @@ async def skip(ctx):
         del user_timers[user_id]
 
     await ctx.send("Question skipped. Use `!sql` to get a new question.")
-
-    # Optionally, you can automatically give a new question here
-    # await get_difficulty_question(ctx, current_question['difficulty'])
 
 def main():
     loop = asyncio.get_event_loop()
