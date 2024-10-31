@@ -50,23 +50,6 @@ For a full list of commands, use `!help` in the Discord server.
 6. **Compete and Learn**: Participate in daily challenges and SQL battles to test your skills against others.
 7. **Provide Feedback**: Rate questions and report any issues to help improve the system.
 
-## For Developers
-
-If you're interested in running your own instance of SQL Mentor or contributing to the project:
-
-1. Clone the repository: `git clone https://github.com/your-username/sql-mentor.git`
-2. Install dependencies: `pip install -r requirements.txt`
-3. Set up environment variables (see [Environment Variables](#environment-variables) section)
-4. Run the bot: `python bot.py`
-
-### Environment Variables
-
-Create a `.env` file in the root directory with the following variables:
-
-DATABASE_URL=your_postgresql_database_url
-DISCORD_TOKEN=your_discord_bot_token
-CHANNEL_ID=comma_separated_list_of_channel_ids
-
 ## Contributing
 
 We welcome contributions to SQL Mentor! Here's how you can contribute:
