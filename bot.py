@@ -356,6 +356,40 @@ async def submit(ctx, *, answer):
                       f"• `!question <id>` - Try a specific question by ID")
 
 
+# async def process_answer(ctx, user_id, answer):
+#     question = await user_questions.get(user_id)
+#     if not question:
+#         await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
+#         return
+
+#     is_correct, feedback = check_answer(answer, question['answer'])
+#     points = await calculate_points(user_id, is_correct, question['difficulty'])
+    
+#     await update_all_scores(user_id, question['id'], is_correct, points)
+    
+#     if is_correct:
+#         await ctx.send(f"🎉 Correct! You've earned {points} points. {feedback}\n\n"
+#                        f"📊 Track your progress with these commands:\n"
+#                        f"• `!daily_progress` - See your progress for today\n"
+#                        f"• `!weekly_progress` - Check your weekly progress\n"
+#                        f"• `!my_achievements` - View your achievements\n")
+#         await user_questions.pop(user_id, None)
+#         await user_attempts.pop(user_id, None)
+#     else:
+#         max_attempts = await get_max_attempts(user_id, question['id'])
+#         current_attempts = await user_attempts.get(user_id, 0)
+#         current_attempts += 1  # Increment attempt counter
+#         await user_attempts.set(user_id, current_attempts)
+        
+#         if current_attempts < max_attempts:  # Changed from max_attempts - 1
+#             await ctx.send(f"❌ Incorrect. {points} points deducted. {feedback}\n"
+#                           f"You have {max_attempts - current_attempts} attempts left. Use `!try_again` to attempt this question again.\n"
+#                           f"\nIf you believe this question is incorrect, use `!report question_id` <your feedback here>.")
+#         else:
+#             await ctx.send(f"❌ Incorrect. {points} points deducted. You've used all your attempts for this question. Use `!sql` to get a new question.")
+#             await user_questions.pop(user_id, None)
+#             await user_attempts.pop(user_id, None)
+
 async def process_answer(ctx, user_id, answer):
     question = await user_questions.get(user_id)
     if not question:
@@ -381,14 +415,23 @@ async def process_answer(ctx, user_id, answer):
         current_attempts += 1  # Increment attempt counter
         await user_attempts.set(user_id, current_attempts)
         
-        if current_attempts < max_attempts:  # Changed from max_attempts - 1
-            await ctx.send(f"❌ Incorrect. {points} points deducted. {feedback}\n"
-                          f"You have {max_attempts - current_attempts} attempts left. Use `!try_again` to attempt this question again.\n"
-                          f"\nIf you believe this question is incorrect, use `!report question_id` <your feedback here>.")
+        if current_attempts < max_attempts:
+            help_message = (
+                f"❌ Incorrect. {points} points deducted. {feedback}\n"
+                f"You have {max_attempts - current_attempts} attempts left.\n\n"
+                "Available options:\n"
+                "• `!try_again` - Attempt this question again\n"
+                "• `!hint` - Get a hint for this question\n"
+                f"• `!reveal_answer {question['id']}` - See the solution (-50 points)\n"
+                "• `!skip` - Try a different question\n\n"
+                "If you believe this question is incorrect, use `!report <question_id> <your feedback>`"
+            )
+            await ctx.send(help_message)
         else:
             await ctx.send(f"❌ Incorrect. {points} points deducted. You've used all your attempts for this question. Use `!sql` to get a new question.")
             await user_questions.pop(user_id, None)
             await user_attempts.pop(user_id, None)
+
 
 @bot.command()
 @db_connection_required()
@@ -825,6 +868,65 @@ async def set_current_challenge(question_id, end_time):
                 logging.info(f"Set challenge: question_id={question_id}, end_time={end_time_utc}")
     except Exception as e:
         logging.error(f"Error setting current challenge: {e}")
+
+
+@bot.command()
+async def reveal_answer(ctx, question_id: int = None):
+    if not question_id:
+        await ctx.send("❌ Please provide a question ID. Usage: `!reveal_answer <question_id>`")
+        return
+        
+    user_id = ctx.author.id
+    await user_last_active.set(user_id, datetime.now(timezone.utc))
+    
+    try:
+        async with DB_SEMAPHORE:
+            async with bot.db.acquire() as conn:
+                # Check if user has attempted this question
+                attempts = await conn.fetchval('''
+                    SELECT COUNT(*) FROM user_submissions
+                    WHERE user_id = $1 AND question_id = $2 AND is_correct = FALSE
+                ''', user_id, question_id)
+                
+                if attempts == 0:
+                    await ctx.send("❌ You need to attempt this question at least once before revealing the answer!")
+                    return
+                
+                # Get the question details
+                question = await conn.fetchrow('''
+                    SELECT question, answer, datasets FROM questions
+                    WHERE id = $1
+                ''', question_id)
+                
+                if not question:
+                    await ctx.send("❌ Question not found! Please check the question ID.")
+                    return
+                
+                # Deduct points and record the submission
+                await update_user_stats(user_id, question_id, False, -50)
+                
+                # Format the response message
+                response = (
+                    "💡 **Answer Revealed** 💡\n\n"
+                    f"📝 **Question {question_id}:**\n{question['question']}\n\n"
+                )
+                
+                if question['datasets']:
+                    response += f"📊 **Dataset:**\n```\n{question['datasets']}\n```\n\n"
+                
+                response += (
+                    f"✨ **Solution:**\n```sql\n{question['answer']}\n```\n\n"
+                    "⚠️ **Note:** 50 points have been deducted from your total score.\n"
+                    "Keep practicing to improve your SQL skills! 💪"
+                )
+                
+                await ctx.send(response)
+                
+    except ValueError:
+        await ctx.send("❌ Please provide a valid question ID. Example: `!reveal_answer 22`")
+    except Exception as e:
+        logging.error(f"Error in reveal_answer command: {e}")
+        await ctx.send("❌ An error occurred while processing your request. Please try again later.")
 
 
 @bot.command()
