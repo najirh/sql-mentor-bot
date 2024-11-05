@@ -355,139 +355,6 @@ async def submit(ctx, *, answer):
                       f"• `!company <company>` - Practice company-specific questions\n"
                       f"• `!question <id>` - Try a specific question by ID")
 
-
-# async def process_answer(ctx, user_id, answer):
-#     question = await user_questions.get(user_id)
-#     if not question:
-#         await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
-#         return
-
-#     is_correct, feedback = check_answer(answer, question['answer'])
-#     points = await calculate_points(user_id, is_correct, question['difficulty'])
-    
-#     await update_all_scores(user_id, question['id'], is_correct, points)
-    
-#     if is_correct:
-#         await ctx.send(f"🎉 Correct! You've earned {points} points. {feedback}\n\n"
-#                        f"📊 Track your progress with these commands:\n"
-#                        f"• `!daily_progress` - See your progress for today\n"
-#                        f"• `!weekly_progress` - Check your weekly progress\n"
-#                        f"• `!my_achievements` - View your achievements\n")
-#         await user_questions.pop(user_id, None)
-#         await user_attempts.pop(user_id, None)
-#     else:
-#         max_attempts = await get_max_attempts(user_id, question['id'])
-#         current_attempts = await user_attempts.get(user_id, 0)
-#         current_attempts += 1  # Increment attempt counter
-#         await user_attempts.set(user_id, current_attempts)
-        
-#         if current_attempts < max_attempts:  # Changed from max_attempts - 1
-#             await ctx.send(f"❌ Incorrect. {points} points deducted. {feedback}\n"
-#                           f"You have {max_attempts - current_attempts} attempts left. Use `!try_again` to attempt this question again.\n"
-#                           f"\nIf you believe this question is incorrect, use `!report question_id` <your feedback here>.")
-#         else:
-#             await ctx.send(f"❌ Incorrect. {points} points deducted. You've used all your attempts for this question. Use `!sql` to get a new question.")
-#             await user_questions.pop(user_id, None)
-#             await user_attempts.pop(user_id, None)
-
-# async def process_answer(ctx, user_id, answer):
-#     question = await user_questions.get(user_id)
-#     if not question:
-#         await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
-#         return
-
-#     is_correct, feedback = check_answer(answer, question['answer'])
-#     points = await calculate_points(user_id, is_correct, question['difficulty'])
-    
-#     await update_all_scores(user_id, question['id'], is_correct, points)
-    
-#     if is_correct:
-#         await ctx.send(f"🎉 Correct! You've earned {points} points. {feedback}\n\n"
-#                        f"📊 Track your progress with these commands:\n"
-#                        f"• `!daily_progress` - See your progress for today\n"
-#                        f"• `!weekly_progress` - Check your weekly progress\n"
-#                        f"• `!my_achievements` - View your achievements\n")
-#         await user_questions.pop(user_id, None)
-#         await user_attempts.pop(user_id, None)
-#     else:
-#         max_attempts = await get_max_attempts(user_id, question['id'])
-#         current_attempts = await user_attempts.get(user_id, 0)
-#         current_attempts += 1  # Increment attempt counter
-#         await user_attempts.set(user_id, current_attempts)
-        
-#         if current_attempts < max_attempts:
-#             help_message = (
-#                 f"❌ Incorrect. {points} points deducted. {feedback}\n"
-#                 f"You have {max_attempts - current_attempts} attempts left.\n\n"
-#                 "Available options:\n"
-#                 "• `!try_again` - Attempt this question again\n"
-#                 "• `!hint` - Get a hint for this question\n"
-#                 f"• `!reveal_answer {question['id']}` - See the solution (-50 points)\n"
-#                 "• `!skip` - Try a different question\n\n"
-#                 "If you believe this question is incorrect, use `!report <question_id> <your feedback>`"
-#             )
-#             await ctx.send(help_message)
-#         else:
-#             await ctx.send(f"❌ Incorrect. {points} points deducted. You've used all your attempts for this question. Use `!sql` to get a new question.")
-#             await user_questions.pop(user_id, None)
-#             await user_attempts.pop(user_id, None)
-
-# async def process_answer(ctx, user_id, answer):
-#     question = await user_questions.get(user_id)
-#     if not question:
-#         await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
-#         return
-
-#     is_correct, feedback = check_answer(answer, question['answer'])
-#     points = await calculate_points(user_id, is_correct, question['difficulty'])
-    
-#     await update_all_scores(user_id, question['id'], is_correct, points)
-    
-#     if is_correct:
-#         # Update streak immediately
-#         await update_user_streak(user_id)
-#         current_streak = await get_user_streak(user_id)
-        
-#         # Prepare streak message
-#         streak_msg = ""
-#         if current_streak > 0:
-#             streak_msg = f"\n🔥 Current Streak: {current_streak} days"
-#             if current_streak >= 7:
-#                 streak_msg += " - Impressive!"
-#             elif current_streak >= 3:
-#                 streak_msg += " - Keep it up!"
-        
-#         await ctx.send(
-#             f"🎉 Correct! You've earned {points} points. {feedback}{streak_msg}\n\n"
-#             f"📊 Track your progress with these commands:\n"
-#             f"• `!daily_progress` - See your progress for today\n"
-#             f"• `!weekly_progress` - Check your weekly progress\n"
-#             f"• `!my_achievements` - View your achievements\n"
-#         )
-#         await user_questions.pop(user_id, None)
-#         await user_attempts.pop(user_id, None)
-#     else:
-#         max_attempts = await get_max_attempts(user_id, question['id'])
-#         current_attempts = await user_attempts.get(user_id, 0)
-#         current_attempts += 1  # Increment attempt counter
-#         await user_attempts.set(user_id, current_attempts)
-        
-#         if current_attempts < max_attempts:
-#             help_message = (
-#                 f"❌ Incorrect. {points} points deducted. {feedback}\n"
-#                 f"You have {max_attempts - current_attempts} attempts left.\n\n"
-#                 "Available options:\n"
-#                 "• `!try_again` - Attempt this question again\n"
-#                 "• `!hint` - Get a hint for this question\n"
-#                 f"• `!reveal_answer {question['id']}` - See the solution (-50 points)\n"
-#                 "• `!skip` - Try a different question\n\n"
-#                 "If you believe this question is incorrect, use `!report <question_id> <your feedback>`"
-#             )
-#             await ctx.send(help_message)
-#         else:
-#             await ctx.send(f"❌ Incorrect. {points} points deducted. You've used all your attempts for this question. Use `!sql` to get a new question.")
-#             await user_questions.pop(user_id, None)
-#             await user_attempts.pop(user_id, None)
 async def process_answer(ctx, user_id, answer):
     question = await user_questions.get(user_id)
     if not question:
@@ -1896,6 +1763,133 @@ async def submit_question(ctx, *, question):
 #         logging.error(f"Error in daily_progress: {e}")
 #         await ctx.send("❌ An error occurred while fetching your daily progress. Please try again later.")
 
+# @bot.command()
+# async def daily_progress(ctx):
+#     user_id = ctx.author.id
+#     await user_last_active.set(user_id, datetime.now(timezone.utc))
+#     today = get_ist_time().date()
+    
+#     try:
+#         async with DB_SEMAPHORE:
+#             async with bot.db.acquire() as conn:
+#                 daily_stats = await conn.fetchrow('''
+#                     SELECT 
+#                         COUNT(*) as total_attempts,
+#                         SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as correct_answers,
+#                         SUM(CASE WHEN NOT is_correct THEN 1 ELSE 0 END) as incorrect_answers,
+#                         COALESCE(SUM(points), 0) as total_points,
+#                         COUNT(DISTINCT question_id) as unique_questions
+#                     FROM user_submissions
+#                     WHERE user_id = $1 
+#                     AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
+#                 ''', user_id, today)
+                
+#                 streak = await get_user_streak(user_id)
+        
+#         if daily_stats and daily_stats['total_attempts'] > 0:
+#             success_rate = (daily_stats['correct_answers'] / daily_stats['total_attempts']) * 100
+#             points_today = daily_stats['total_points']
+#             points_buffer_remaining = max(-100 - points_today, 0)  # How many more points they can lose
+            
+#             message = (
+#                 "📊 **Today's SQL Progress Report** 📊\n"
+#                 "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+#                 f"🎯 **Questions Stats**\n"
+#                 f"• Unique Questions: {daily_stats['unique_questions']}\n"
+#                 f"• Total Attempts: {daily_stats['total_attempts']}\n"
+#                 f"• Correct Answers: {daily_stats['correct_answers']} ✅\n"
+#                 f"• Incorrect Answers: {daily_stats['incorrect_answers']} ❌\n"
+#                 f"• Success Rate: {success_rate:.1f}% 📈\n\n"
+#                 f"💫 **Rewards**\n"
+#                 f"• Points Today: {points_today} 💰\n"
+#                 f"• Current Streak: {streak} 🔥\n\n"
+#                 f"⏳ **Daily Limits**\n"
+#                 f"• Attempts Left: {max(10 - daily_stats['total_attempts'], 0)} of 10\n"
+#                 f"• Points Buffer: You can lose {points_buffer_remaining} more points today\n\n"
+#                 "Keep pushing forward! Every query makes you stronger! 💪\n"
+#                 "Use `!sql` to continue your learning journey! 🚀"
+#             )
+#         else:
+#             message = (
+#                 "🌟 **Start Your Daily SQL Journey!** 🌟\n\n"
+#                 "You haven't attempted any questions today yet!\n"
+#                 f"• Daily Attempts Available: 10 ⏳\n"
+#                 f"• Points Buffer: You can lose up to 100 points today 🛡️\n"
+#                 f"• Current Streak: {streak} 🔥\n\n"
+#                 "Ready to begin? Use `!sql` to get your first question! 💪\n"
+#                 "Remember: Consistency is key to mastery! 🔑"
+#             )
+        
+#         await ctx.send(message)
+        
+#     except Exception as e:
+#         logging.error(f"Error in daily_progress: {e}")
+#         await ctx.send("❌ An error occurred while fetching your daily progress. Please try again later.")
+# @bot.command()
+# async def daily_progress(ctx):
+#     user_id = ctx.author.id
+#     await user_last_active.set(user_id, datetime.now(timezone.utc))
+#     today = get_ist_time().date()
+    
+#     try:
+#         async with DB_SEMAPHORE:
+#             async with bot.db.acquire() as conn:
+#                 daily_stats = await conn.fetchrow('''
+#                     SELECT 
+#                         COUNT(*) as total_attempts,
+#                         SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as correct_answers,
+#                         SUM(CASE WHEN NOT is_correct THEN 1 ELSE 0 END) as incorrect_answers,
+#                         COALESCE(SUM(points), 0) as total_points,
+#                         COUNT(DISTINCT question_id) as unique_questions
+#                     FROM user_submissions
+#                     WHERE user_id = $1 
+#                     AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
+#                 ''', user_id, today)
+                
+#                 streak = await get_user_streak(user_id)
+        
+#         if daily_stats and daily_stats['total_attempts'] > 0:
+#             success_rate = (daily_stats['correct_answers'] / daily_stats['total_attempts']) * 100
+#             points_today = daily_stats['total_points']
+            
+#             # Calculate buffer remaining (only for negative points)
+#             points_buffer_remaining = abs(min(-100 - min(points_today, 0), 0))  # Changed buffer calculation
+            
+#             message = (
+#                 "📊 **Today's SQL Progress Report** 📊\n"
+#                 "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+#                 f"🎯 **Questions Stats**\n"
+#                 f"• Unique Questions: {daily_stats['unique_questions']}\n"
+#                 f"• Total Attempts: {daily_stats['total_attempts']}\n"
+#                 f"• Correct Answers: {daily_stats['correct_answers']} ✅\n"
+#                 f"• Incorrect Answers: {daily_stats['incorrect_answers']} ❌\n"
+#                 f"• Success Rate: {success_rate:.1f}% 📈\n\n"
+#                 f"💫 **Rewards**\n"
+#                 f"• Points Today: {points_today} 💰\n"
+#                 f"• Current Streak: {streak} 🔥\n\n"
+#                 f"⏳ **Daily Limits**\n"
+#                 f"• Attempts Left: {max(10 - daily_stats['total_attempts'], 0)} of 10\n"
+#                 f"• Points Buffer: {points_buffer_remaining} 🛡️\n\n"  # Added shield emoji
+#                 "Keep pushing forward! Every query makes you stronger! 💪\n"
+#                 "Use `!sql` to continue your learning journey! 🚀"
+#             )
+#         else:
+#             message = (
+#                 "🌟 **Start Your Daily SQL Journey!** 🌟\n\n"
+#                 "You haven't attempted any questions today yet!\n"
+#                 f"• Daily Attempts Available: 10 ⏳\n"
+#                 f"• Points Buffer: 100 🛡️\n"  # Added shield emoji
+#                 f"• Current Streak: {streak} 🔥\n\n"
+#                 "Ready to begin? Use `!sql` to get your first question! 💪\n"
+#                 "Remember: Consistency is key to mastery! 🔑"
+#             )
+        
+#         await ctx.send(message)
+        
+#     except Exception as e:
+#         logging.error(f"Error in daily_progress: {e}")
+#         await ctx.send("❌ An error occurred while fetching your daily progress. Please try again later.")
+
 @bot.command()
 async def daily_progress(ctx):
     user_id = ctx.author.id
@@ -1922,7 +1916,15 @@ async def daily_progress(ctx):
         if daily_stats and daily_stats['total_attempts'] > 0:
             success_rate = (daily_stats['correct_answers'] / daily_stats['total_attempts']) * 100
             points_today = daily_stats['total_points']
-            points_buffer_remaining = max(-100 - points_today, 0)  # How many more points they can lose
+            
+            # Calculate buffer remaining (considering total points)
+            if points_today >= 0:
+                points_buffer_remaining = 100  # Full buffer if points are positive
+            else:
+                points_buffer_remaining = max(100 + points_today, 0)  # Remaining buffer based on negative points
+            
+            attempts_left = max(10 - daily_stats['total_attempts'], 0)
+            attempts_message = f"• Attempts Left: {attempts_left} of 10 ⏳"
             
             message = (
                 "📊 **Today's SQL Progress Report** 📊\n"
@@ -1937,8 +1939,8 @@ async def daily_progress(ctx):
                 f"• Points Today: {points_today} 💰\n"
                 f"• Current Streak: {streak} 🔥\n\n"
                 f"⏳ **Daily Limits**\n"
-                f"• Attempts Left: {max(10 - daily_stats['total_attempts'], 0)} of 10\n"
-                f"• Points Buffer: You can lose {points_buffer_remaining} more points today\n\n"
+                f"{attempts_message}\n"
+                f"• Points Buffer: {points_buffer_remaining} 🛡️\n\n"
                 "Keep pushing forward! Every query makes you stronger! 💪\n"
                 "Use `!sql` to continue your learning journey! 🚀"
             )
@@ -1947,7 +1949,7 @@ async def daily_progress(ctx):
                 "🌟 **Start Your Daily SQL Journey!** 🌟\n\n"
                 "You haven't attempted any questions today yet!\n"
                 f"• Daily Attempts Available: 10 ⏳\n"
-                f"• Points Buffer: You can lose up to 100 points today 🛡️\n"
+                f"• Points Buffer: 100 🛡️\n"
                 f"• Current Streak: {streak} 🔥\n\n"
                 "Ready to begin? Use `!sql` to get your first question! 💪\n"
                 "Remember: Consistency is key to mastery! 🔑"
@@ -1958,7 +1960,6 @@ async def daily_progress(ctx):
     except Exception as e:
         logging.error(f"Error in daily_progress: {e}")
         await ctx.send("❌ An error occurred while fetching your daily progress. Please try again later.")
-
 
 @bot.command()
 async def weekly_progress(ctx):
