@@ -432,6 +432,62 @@ async def submit(ctx, *, answer):
 #             await user_questions.pop(user_id, None)
 #             await user_attempts.pop(user_id, None)
 
+# async def process_answer(ctx, user_id, answer):
+#     question = await user_questions.get(user_id)
+#     if not question:
+#         await ctx.send("You don't have an active question. Use `!sql` to get a new question.")
+#         return
+
+#     is_correct, feedback = check_answer(answer, question['answer'])
+#     points = await calculate_points(user_id, is_correct, question['difficulty'])
+    
+#     await update_all_scores(user_id, question['id'], is_correct, points)
+    
+#     if is_correct:
+#         # Update streak immediately
+#         await update_user_streak(user_id)
+#         current_streak = await get_user_streak(user_id)
+        
+#         # Prepare streak message
+#         streak_msg = ""
+#         if current_streak > 0:
+#             streak_msg = f"\n🔥 Current Streak: {current_streak} days"
+#             if current_streak >= 7:
+#                 streak_msg += " - Impressive!"
+#             elif current_streak >= 3:
+#                 streak_msg += " - Keep it up!"
+        
+#         await ctx.send(
+#             f"🎉 Correct! You've earned {points} points. {feedback}{streak_msg}\n\n"
+#             f"📊 Track your progress with these commands:\n"
+#             f"• `!daily_progress` - See your progress for today\n"
+#             f"• `!weekly_progress` - Check your weekly progress\n"
+#             f"• `!my_achievements` - View your achievements\n"
+#         )
+#         await user_questions.pop(user_id, None)
+#         await user_attempts.pop(user_id, None)
+#     else:
+#         max_attempts = await get_max_attempts(user_id, question['id'])
+#         current_attempts = await user_attempts.get(user_id, 0)
+#         current_attempts += 1  # Increment attempt counter
+#         await user_attempts.set(user_id, current_attempts)
+        
+#         if current_attempts < max_attempts:
+#             help_message = (
+#                 f"❌ Incorrect. {points} points deducted. {feedback}\n"
+#                 f"You have {max_attempts - current_attempts} attempts left.\n\n"
+#                 "Available options:\n"
+#                 "• `!try_again` - Attempt this question again\n"
+#                 "• `!hint` - Get a hint for this question\n"
+#                 f"• `!reveal_answer {question['id']}` - See the solution (-50 points)\n"
+#                 "• `!skip` - Try a different question\n\n"
+#                 "If you believe this question is incorrect, use `!report <question_id> <your feedback>`"
+#             )
+#             await ctx.send(help_message)
+#         else:
+#             await ctx.send(f"❌ Incorrect. {points} points deducted. You've used all your attempts for this question. Use `!sql` to get a new question.")
+#             await user_questions.pop(user_id, None)
+#             await user_attempts.pop(user_id, None)
 async def process_answer(ctx, user_id, answer):
     question = await user_questions.get(user_id)
     if not question:
@@ -441,53 +497,55 @@ async def process_answer(ctx, user_id, answer):
     is_correct, feedback = check_answer(answer, question['answer'])
     points = await calculate_points(user_id, is_correct, question['difficulty'])
     
-    await update_all_scores(user_id, question['id'], is_correct, points)
-    
-    if is_correct:
-        # Update streak immediately
-        await update_user_streak(user_id)
-        current_streak = await get_user_streak(user_id)
+    try:
+        await update_all_scores(user_id, question['id'], is_correct, points)
         
-        # Prepare streak message
-        streak_msg = ""
-        if current_streak > 0:
+        if is_correct:
+            # Get updated streak after processing
+            current_streak = await get_user_streak(user_id)
             streak_msg = f"\n🔥 Current Streak: {current_streak} days"
             if current_streak >= 7:
                 streak_msg += " - Impressive!"
             elif current_streak >= 3:
                 streak_msg += " - Keep it up!"
-        
-        await ctx.send(
-            f"🎉 Correct! You've earned {points} points. {feedback}{streak_msg}\n\n"
-            f"📊 Track your progress with these commands:\n"
-            f"• `!daily_progress` - See your progress for today\n"
-            f"• `!weekly_progress` - Check your weekly progress\n"
-            f"• `!my_achievements` - View your achievements\n"
-        )
-        await user_questions.pop(user_id, None)
-        await user_attempts.pop(user_id, None)
-    else:
-        max_attempts = await get_max_attempts(user_id, question['id'])
-        current_attempts = await user_attempts.get(user_id, 0)
-        current_attempts += 1  # Increment attempt counter
-        await user_attempts.set(user_id, current_attempts)
-        
-        if current_attempts < max_attempts:
-            help_message = (
-                f"❌ Incorrect. {points} points deducted. {feedback}\n"
-                f"You have {max_attempts - current_attempts} attempts left.\n\n"
-                "Available options:\n"
-                "• `!try_again` - Attempt this question again\n"
-                "• `!hint` - Get a hint for this question\n"
-                f"• `!reveal_answer {question['id']}` - See the solution (-50 points)\n"
-                "• `!skip` - Try a different question\n\n"
-                "If you believe this question is incorrect, use `!report <question_id> <your feedback>`"
+            
+            await ctx.send(
+                f"🎉 Correct! You've earned {points} points. {feedback}{streak_msg}\n\n"
+                f"📊 Track your progress with these commands:\n"
+                f"• `!daily_progress` - See your progress for today\n"
+                f"• `!weekly_progress` - Check your weekly progress\n"
+                f"• `!my_achievements` - View your achievements\n"
             )
-            await ctx.send(help_message)
-        else:
-            await ctx.send(f"❌ Incorrect. {points} points deducted. You've used all your attempts for this question. Use `!sql` to get a new question.")
             await user_questions.pop(user_id, None)
             await user_attempts.pop(user_id, None)
+        else:
+            max_attempts = await get_max_attempts(user_id, question['id'])
+            current_attempts = await user_attempts.get(user_id, 0)
+            current_attempts += 1  # Increment attempt counter
+            await user_attempts.set(user_id, current_attempts)
+            
+            if current_attempts < max_attempts:
+                help_message = (
+                    f"❌ Incorrect. {points} points deducted. {feedback}\n"
+                    f"You have {max_attempts - current_attempts} attempts left.\n\n"
+                    "Available options:\n"
+                    "• `!try_again` - Attempt this question again\n"
+                    "• `!hint` - Get a hint for this question\n"
+                    f"• `!reveal_answer {question['id']}` - See the solution (-50 points)\n"
+                    "• `!skip` - Try a different question\n\n"
+                    "If you believe this question is incorrect, use `!report <question_id> <your feedback>`"
+                )
+                await ctx.send(help_message)
+            else:
+                await ctx.send(f"❌ Incorrect. {points} points deducted. You've used all your attempts for this question. Use `!sql` to get a new question.")
+                await user_questions.pop(user_id, None)
+                await user_attempts.pop(user_id, None)
+    
+    except Exception as e:
+        logging.error(f"Error in process_answer: {e}")
+        await ctx.send("An error occurred while processing the command. Please try again later.")
+
+
 
 @bot.command()
 @db_connection_required()
@@ -2426,6 +2484,28 @@ async def post_monthly_leaderboard_function():
     # Implement the monthly leaderboard posting logic here
     pass
 
+# async def update_all_scores(user_id, question_id, is_correct, points):
+#     try:
+#         # Update user submissions
+#         await update_user_stats(user_id, question_id, is_correct, points)
+        
+#         # Update weekly points
+#         await update_weekly_points(user_id, points)
+        
+#         # Update daily points
+#         today = get_ist_time().date()
+#         await update_daily_points(user_id, today, points)
+        
+#         # Update user streak
+#         await update_user_streak(user_id, is_correct)
+        
+#         # Check and update achievements
+#         await update_user_achievements(None, user_id)
+        
+#     except Exception as e:
+#         logging.error(f"Error updating all scores: {e}")
+#         raise
+
 async def update_all_scores(user_id, question_id, is_correct, points):
     try:
         # Update user submissions
@@ -2438,8 +2518,9 @@ async def update_all_scores(user_id, question_id, is_correct, points):
         today = get_ist_time().date()
         await update_daily_points(user_id, today, points)
         
-        # Update user streak
-        await update_user_streak(user_id, is_correct)
+        # Update user streak (only if correct answer)
+        if is_correct:
+            await update_user_streak(user_id)  # Removed second argument
         
         # Check and update achievements
         await update_user_achievements(None, user_id)
