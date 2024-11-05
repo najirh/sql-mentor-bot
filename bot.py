@@ -1720,59 +1720,6 @@ async def submit_question(ctx, *, question):
         await ctx.send("An error occurred while submitting your question. Please try again later.")
 
 
-# @bot.command()
-# async def daily_progress(ctx):
-#     user_id = ctx.author.id
-#     await user_last_active.set(user_id, datetime.now(timezone.utc))
-#     today = get_ist_time().date()
-    
-#     async with DB_SEMAPHORE:
-#         async with bot.db.acquire() as conn:
-#             # Get detailed daily statistics
-#             daily_stats = await conn.fetchrow('''
-#                 SELECT 
-#                     COUNT(*) as total_attempts,
-#                     SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as correct_answers,
-#                     COALESCE(SUM(points), 0) as total_points,
-#                     COUNT(DISTINCT question_id) as unique_questions
-#                 FROM user_submissions
-#                 WHERE user_id = $1 
-#                 AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
-#             ''', user_id, today)
-            
-#             # Get streak information
-#             streak = await get_user_streak(user_id)
-    
-#     if daily_stats['total_attempts'] > 0:
-#         success_rate = (daily_stats['correct_answers'] / daily_stats['total_attempts']) * 100
-#         message = (
-#             "🎯 **Your Daily SQL Progress Report** 🎯\n\n"
-#             f"📊 **Today's Activity**\n"
-#             f"• Questions Attempted: {daily_stats['unique_questions']} unique questions\n"
-#             f"• Total Submissions: {daily_stats['total_attempts']} attempts\n"
-#             f"• Correct Answers: {daily_stats['correct_answers']} ✅\n"
-#             f"• Success Rate: {success_rate:.1f}% 📈\n"
-#             f"• Points Earned: {daily_stats['total_points']} 💰\n"
-#             f"• Current Streak: {streak} 🔥\n\n"
-#             f"Daily Limit Status:\n"
-#             f"• Attempts Left: {max(25 - daily_stats['total_attempts'], 0)} of 25 ⏳\n"
-#             f"• Points Buffer: {max(-50 - daily_stats['total_points'], 0)} of -50 🛡️\n\n"
-#             "Keep pushing forward! Every query makes you stronger! 💪\n"
-#             "Use `!sql` to continue your learning journey! 🚀"
-#         )
-#     else:
-#         message = (
-#             "🌟 **Start Your Daily SQL Journey!** 🌟\n\n"
-#             "You haven't attempted any questions today yet!\n"
-#             "• Daily Attempts Available: 10 ⏳\n"
-#             "• Points Buffer: 50 🛡️\n"
-#             "• Current Streak: {streak} 🔥\n\n"
-#             "Ready to begin? Use `!sql` to get your first question! 💪\n"
-#             "Remember: Consistency is key to mastery! 🔑"
-#         )
-
-#     await ctx.send(message)
-
 @bot.command()
 async def daily_progress(ctx):
     user_id = ctx.author.id
@@ -1795,11 +1742,9 @@ async def daily_progress(ctx):
                     AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
                 ''', user_id, today)
                 
-                # Get current streak
-                streak = await conn.fetchval('''
-                    SELECT streak FROM users WHERE user_id = $1
-                ''', user_id) or 0
-    
+                # Use existing get_user_streak function
+                streak = await get_user_streak(user_id)
+        
         if daily_stats and daily_stats['total_attempts'] > 0:
             success_rate = (daily_stats['correct_answers'] / daily_stats['total_attempts']) * 100
             message = (
@@ -1838,24 +1783,6 @@ async def daily_progress(ctx):
         await ctx.send("❌ An error occurred while fetching your daily progress. Please try again later.")
 
 
-# @bot.command()
-# async def weekly_progress(ctx):
-#     user_id = ctx.author.id
-#     await user_last_active.set(user_id, datetime.now(timezone.utc))
-#     week_start = await get_week_start()
-    
-#     async with DB_SEMAPHORE:
-#         async with bot.db.acquire() as conn:
-#             weekly_points = await conn.fetchval('''
-#                 SELECT COALESCE(SUM(points), 0)
-#                 FROM user_submissions
-#                 WHERE user_id = $1 AND submitted_at >= $2
-#             ''', user_id, week_start)
-    
-#     await ctx.send(f"🗓️ Your Weekly Progress 🗓️\n"
-#                    f"Points earned this week: {weekly_points}\n"
-#                    f"You're making great strides! 🚀")
-
 @bot.command()
 async def weekly_progress(ctx):
     user_id = ctx.author.id
@@ -1878,10 +1805,8 @@ async def weekly_progress(ctx):
                     AND submitted_at >= $2
                 ''', user_id, week_start)
                 
-                # Get current streak
-                streak = await conn.fetchval('''
-                    SELECT streak FROM users WHERE user_id = $1
-                ''', user_id) or 0
+                # Use existing get_user_streak function
+                streak = await get_user_streak(user_id)
         
         if weekly_stats and weekly_stats['total_attempts'] > 0:
             success_rate = (weekly_stats['correct_answers'] / weekly_stats['total_attempts']) * 100
@@ -1914,7 +1839,6 @@ async def weekly_progress(ctx):
     except Exception as e:
         logging.error(f"Error in weekly_progress: {e}")
         await ctx.send("❌ An error occurred while fetching your weekly progress. Please try again later.")
-
 
 
 @bot.command()
