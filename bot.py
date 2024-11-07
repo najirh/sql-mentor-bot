@@ -728,7 +728,7 @@ async def update_leaderboard():
 async def update_leaderboard_error(error):
     logging.error(f"Unhandled error in update_leaderboard task: {error}", exc_info=True)
 
-@tasks.loop(time=time(hour=12, minute=0))  # 5:30 PM IST
+@tasks.loop(time=time(hour=14, minute=0))  # 5:30 PM IST
 async def daily_challenge():
     try:
         logging.info("Starting daily challenge task")
@@ -911,6 +911,7 @@ async def reveal_answer(ctx, question_id: int = None):
         logging.error(f"Error in reveal_answer command: {e}")
         await ctx.send("❌ An error occurred while processing your request. Please try again later.")
 
+
 @bot.command()
 async def submit_challenge(ctx, *, answer):
     user_id = ctx.author.id
@@ -921,7 +922,7 @@ async def submit_challenge(ctx, *, answer):
             async with bot.db.acquire() as conn:
                 current_challenge = await conn.fetchrow('SELECT * FROM current_challenge')
                 if not current_challenge:
-                    await ctx.send("🤔 There is no active challenge right now. The next challenge will be posted at 9:20 PM IST!")
+                    await ctx.send("🤔 There is no active challenge right now. The next challenge will be posted at 5:30 PM IST!")
                     return
 
                 now = datetime.now(pytz.UTC)
@@ -940,17 +941,22 @@ async def submit_challenge(ctx, *, answer):
                     await ctx.send("🔄 You've already submitted an answer for this challenge!\n✨ Stay tuned for the results!")
                     return
 
-                # Get the correct answer and check similarity silently
-                challenge_answer = current_challenge['answer']
-                is_correct, _ = check_answer(answer, challenge_answer)
+                # Fetch the correct answer from the questions table
+                question = await conn.fetchrow('SELECT answer FROM questions WHERE id = $1', current_challenge['question_id'])
+                if not question:
+                    await ctx.send("❌ An error occurred while fetching the challenge question. Please try again later.")
+                    return
 
-                # Store submission with correctness flag (but don't reveal result)
+                # Use the same similarity check as regular questions
+                is_correct, _ = check_answer(answer, question['answer'])
+
+                # Store submission with correctness flag
                 await conn.execute('''
                     INSERT INTO challenge_submissions (user_id, challenge_id, answer, is_correct)
                     VALUES ($1, $2, $3, $4)
                 ''', user_id, current_challenge['id'], answer, is_correct)
 
-        # Send the original processing message (without revealing result)
+        # Send confirmation message
         await ctx.send(
             "🎯 **Challenge Submission Received!**\n\n"
             f"👤 Submitted by: **{ctx.author.name}**\n"
@@ -963,7 +969,8 @@ async def submit_challenge(ctx, *, answer):
         logging.error(f"Error in submit_challenge: {e}")
         await ctx.send("❌ An error occurred while processing your submission. Please try again.")
 
-@tasks.loop(time=time(hour=16, minute=0))  # 9:30 PM IST
+
+@tasks.loop(time=time(hour=14, minute=5))  # 9:30 PM IST
 async def challenge_time_over():
     try:
         async with DB_SEMAPHORE:
@@ -973,7 +980,7 @@ async def challenge_time_over():
                 if not current_challenge:
                     return
 
-                question = await get_question_by_id(current_challenge['question_id'])
+                question = await conn.fetchrow('SELECT * FROM questions WHERE id = $1', current_challenge['question_id'])
                 if not question:
                     logging.error(f"Could not find question with ID {current_challenge['question_id']}")
                     return
@@ -998,12 +1005,12 @@ async def challenge_time_over():
 
                 correct_submissions = []
                 incorrect_submissions = []
-                
+
                 for sub in submissions:
                     user_answer = sqlparse.format(sub['answer'], strip_comments=True, reindent=True).strip().lower()
                     correct_answer = sqlparse.format(question['answer'], strip_comments=True, reindent=True).strip().lower()
                     is_correct = user_answer == correct_answer
-                    
+
                     if is_correct:
                         correct_submissions.append(f"🌟 {sub['username']} (+{challenge_points} points)")
                         await update_user_stats(sub['user_id'], question['id'], True, challenge_points)
@@ -1037,6 +1044,7 @@ async def challenge_time_over():
 
     except Exception as e:
         logging.error(f"Error in challenge_time_over task: {e}")
+
 
 @challenge_time_over.before_loop
 async def before_challenge_time_over():
