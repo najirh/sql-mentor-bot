@@ -1715,6 +1715,79 @@ async def submit_question(ctx, *, question):
         await ctx.send("An error occurred while submitting your question. Please try again later.")
 
 
+# @bot.command()
+# async def daily_progress(ctx):
+#     user_id = ctx.author.id
+#     await user_last_active.set(user_id, datetime.now(timezone.utc))
+#     today = get_ist_time().date()
+    
+#     try:
+#         async with DB_SEMAPHORE:
+#             async with bot.db.acquire() as conn:
+#                 # Get total attempts and submissions for today (including all attempts)
+#                 daily_stats = await conn.fetchrow('''
+#                     WITH daily_attempts AS (
+#                         SELECT 
+#                             COUNT(*) as total_attempts,
+#                             SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as correct_answers,
+#                             SUM(CASE WHEN NOT is_correct THEN 1 ELSE 0 END) as incorrect_answers,
+#                             COALESCE(SUM(points), 0) as total_points,
+#                             COUNT(DISTINCT question_id) as unique_questions
+#                         FROM user_submissions
+#                         WHERE user_id = $1 
+#                         AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = 
+#                             DATE(TIMEZONE('UTC', $2::timestamp) AT TIME ZONE 'Asia/Kolkata')
+#                     )
+#                     SELECT 
+#                         *,
+#                         25 - total_attempts as attempts_remaining
+#                     FROM daily_attempts
+#                 ''', user_id, today)
+                
+#                 streak = await get_user_streak(user_id)
+        
+#         if daily_stats and daily_stats['total_attempts'] > 0:
+#             success_rate = (daily_stats['correct_answers'] / daily_stats['total_attempts']) * 100
+#             points_today = daily_stats['total_points']
+            
+#             # Calculate buffer (starts at 100, decreases with negative points)
+#             buffer_remaining = max(100 + min(points_today, 0), 0)
+            
+#             message = (
+#                 "📊 **Today's SQL Progress Report** 📊\n"
+#                 "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+#                 f"🎯 **Questions Stats**\n"
+#                 f"• Unique Questions: {daily_stats['unique_questions']}\n"
+#                 f"• Total Attempts: {daily_stats['total_attempts']}\n"
+#                 f"• Correct Answers: {daily_stats['correct_answers']} ✅\n"
+#                 f"• Incorrect Answers: {daily_stats['incorrect_answers']} ❌\n"
+#                 f"• Success Rate: {success_rate:.1f}% 📈\n\n"
+#                 f"💫 **Rewards**\n"
+#                 f"• Points Today: {points_today} 💰\n"
+#                 f"• Current Streak: {streak} 🔥\n\n"
+#                 f"⏳ **Daily Limits**\n"
+#                 f"• Attempts Left: {daily_stats['attempts_remaining']} of 25 ⏳\n"
+#                 f"• Points Buffer: {buffer_remaining} 🛡️\n\n"
+#                 "Keep pushing forward! Every query makes you stronger! 💪\n"
+#                 "Use `!sql` to continue your learning journey! 🚀"
+#             )
+#         else:
+#             message = (
+#                 "🌟 **Start Your Daily SQL Journey!** 🌟\n\n"
+#                 "You haven't attempted any questions today yet!\n"
+#                 f"• Daily Attempts Available: 25 ⏳\n"  # Changed from 10 to 25
+#                 f"• Points Buffer: 100 🛡️\n"
+#                 f"• Current Streak: {streak} 🔥\n\n"
+#                 "Ready to begin? Use `!sql` to get your first question! 💪\n"
+#                 "Remember: Consistency is key to mastery! 🔑"
+#             )
+        
+#         await ctx.send(message)
+        
+#     except Exception as e:
+#         logging.error(f"Error in daily_progress: {e}")
+#         await ctx.send("❌ An error occurred while fetching your daily progress. Please try again later.")
+
 @bot.command()
 async def daily_progress(ctx):
     user_id = ctx.author.id
@@ -1736,7 +1809,7 @@ async def daily_progress(ctx):
                         FROM user_submissions
                         WHERE user_id = $1 
                         AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = 
-                            DATE(TIMEZONE('UTC', $2::timestamp) AT TIME ZONE 'Asia/Kolkata')
+                            DATE($2 AT TIME ZONE 'Asia/Kolkata')
                     )
                     SELECT 
                         *,
@@ -1775,7 +1848,7 @@ async def daily_progress(ctx):
             message = (
                 "🌟 **Start Your Daily SQL Journey!** 🌟\n\n"
                 "You haven't attempted any questions today yet!\n"
-                f"• Daily Attempts Available: 25 ⏳\n"  # Changed from 10 to 25
+                f"• Daily Attempts Available: 25 ⏳\n"
                 f"• Points Buffer: 100 🛡️\n"
                 f"• Current Streak: {streak} 🔥\n\n"
                 "Ready to begin? Use `!sql` to get your first question! 💪\n"
@@ -1787,7 +1860,6 @@ async def daily_progress(ctx):
     except Exception as e:
         logging.error(f"Error in daily_progress: {e}")
         await ctx.send("❌ An error occurred while fetching your daily progress. Please try again later.")
-
 
 @bot.command()
 async def weekly_progress(ctx):
