@@ -1796,6 +1796,79 @@ async def submit_question(ctx, *, question):
 #         logging.error(f"Error in daily_progress: {e}")
 #         await ctx.send("❌ An error occurred while fetching your daily progress. Please try again later.")
 
+# @bot.command()
+# async def daily_progress(ctx):
+#     user_id = ctx.author.id
+#     await user_last_active.set(user_id, datetime.now(timezone.utc))
+#     today = get_ist_time().date()
+    
+#     try:
+#         async with DB_SEMAPHORE:
+#             async with bot.db.acquire() as conn:
+#                 # Get total attempts and submissions for today (including all attempts)
+#                 daily_stats = await conn.fetchrow('''
+#                     WITH daily_attempts AS (
+#                         SELECT 
+#                             COUNT(*) as total_attempts,
+#                             SUM(CASE WHEN is_correct THEN 1 ELSE 0 END) as correct_answers,
+#                             SUM(CASE WHEN NOT is_correct THEN 1 ELSE 0 END) as incorrect_answers,
+#                             COALESCE(SUM(points), 0) as total_points,
+#                             COUNT(DISTINCT question_id) as unique_questions
+#                         FROM user_submissions
+#                         WHERE user_id = $1 
+#                         AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = 
+#                             DATE($2 AT TIME ZONE 'Asia/Kolkata')
+#                     )
+#                     SELECT 
+#                         *,
+#                         25 - total_attempts as attempts_remaining
+#                     FROM daily_attempts
+#                 ''', user_id, today)
+                
+#                 streak = await get_user_streak(user_id)
+        
+#         if daily_stats and daily_stats['total_attempts'] > 0:
+#             success_rate = (daily_stats['correct_answers'] / daily_stats['total_attempts']) * 100
+#             points_today = daily_stats['total_points']
+            
+#             # Calculate buffer (starts at 100, decreases with negative points)
+#             buffer_remaining = max(100 + min(points_today, 0), 0)
+            
+#             message = (
+#                 "📊 **Today's SQL Progress Report** 📊\n"
+#                 "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+#                 f"🎯 **Questions Stats**\n"
+#                 f"• Unique Questions: {daily_stats['unique_questions']}\n"
+#                 f"• Total Attempts: {daily_stats['total_attempts']}\n"
+#                 f"• Correct Answers: {daily_stats['correct_answers']} ✅\n"
+#                 f"• Incorrect Answers: {daily_stats['incorrect_answers']} ❌\n"
+#                 f"• Success Rate: {success_rate:.1f}% 📈\n\n"
+#                 f"💫 **Rewards**\n"
+#                 f"• Points Today: {points_today} 💰\n"
+#                 f"• Current Streak: {streak} 🔥\n\n"
+#                 f"⏳ **Daily Limits**\n"
+#                 f"• Attempts Left: {daily_stats['attempts_remaining']} of 25 ⏳\n"
+#                 f"• Points Buffer: {buffer_remaining} 🛡️\n\n"
+#                 "Keep pushing forward! Every query makes you stronger! 💪\n"
+#                 "Use `!sql` to continue your learning journey! 🚀"
+#             )
+#         else:
+#             message = (
+#                 "🌟 **Start Your Daily SQL Journey!** 🌟\n\n"
+#                 "You haven't attempted any questions today yet!\n"
+#                 f"• Daily Attempts Available: 25 ⏳\n"
+#                 f"• Points Buffer: 100 🛡️\n"
+#                 f"• Current Streak: {streak} 🔥\n\n"
+#                 "Ready to begin? Use `!sql` to get your first question! 💪\n"
+#                 "Remember: Consistency is key to mastery! 🔑"
+#             )
+        
+#         await ctx.send(message)
+        
+#     except Exception as e:
+#         logging.error(f"Error in daily_progress: {e}")
+#         await ctx.send("❌ An error occurred while fetching your daily progress. Please try again later.")
+
 @bot.command()
 async def daily_progress(ctx):
     user_id = ctx.author.id
@@ -1817,7 +1890,7 @@ async def daily_progress(ctx):
                         FROM user_submissions
                         WHERE user_id = $1 
                         AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = 
-                            DATE($2 AT TIME ZONE 'Asia/Kolkata')
+                            DATE($2::timestamp AT TIME ZONE 'Asia/Kolkata')
                     )
                     SELECT 
                         *,
@@ -1868,6 +1941,8 @@ async def daily_progress(ctx):
     except Exception as e:
         logging.error(f"Error in daily_progress: {e}")
         await ctx.send("❌ An error occurred while fetching your daily progress. Please try again later.")
+
+
 
 @bot.command()
 async def weekly_progress(ctx):
@@ -2099,11 +2174,87 @@ async def get_user_streak(user_id):
 #     except Exception as e:
 #         logging.error(f"Error updating user streak: {e}")
 
+# async def update_user_streak(user_id):
+#     try:
+#         async with DB_SEMAPHORE:
+#             async with bot.db.acquire() as conn:
+#                 today = get_ist_time().date()
+#                 yesterday = today - timedelta(days=1)
+                
+#                 # Check if streak was already updated today
+#                 last_update = await conn.fetchval('''
+#                     SELECT last_streak_update 
+#                     FROM user_stats 
+#                     WHERE user_id = $1
+#                 ''', user_id)
+                
+#                 # Convert last_update to IST date if it exists
+#                 last_update_date = None
+#                 if last_update:
+#                     last_update_date = convert_to_ist(last_update).date()
+                
+#                 if last_update_date == today:
+#                     return  # Already updated streak today
+                
+#                 # Check today's activity
+#                 today_solved = await conn.fetchval('''
+#                     SELECT EXISTS(
+#                         SELECT 1 FROM user_submissions
+#                         WHERE user_id = $1 
+#                         AND is_correct = TRUE
+#                         AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
+#                     )
+#                 ''', user_id, today)
+                
+#                 if not today_solved:
+#                     return  # No streak update if no correct answers today
+                
+#                 # Check yesterday's activity
+#                 yesterday_solved = await conn.fetchval('''
+#                     SELECT EXISTS(
+#                         SELECT 1 FROM user_submissions
+#                         WHERE user_id = $1 
+#                         AND is_correct = TRUE
+#                         AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
+#                     )
+#                 ''', user_id, yesterday)
+                
+#                 # Get current streak
+#                 current_streak = await get_user_streak(user_id)
+                
+#                 # Update streak logic
+#                 if not last_update:
+#                     # First time solving a question
+#                     new_streak = 1
+#                 elif yesterday_solved:
+#                     # Continued streak
+#                     new_streak = current_streak + 1
+#                 else:
+#                     # Broke the streak, but solved today
+#                     new_streak = 1
+                
+#                 # Update streak and last update timestamp in database
+#                 current_time = get_ist_time()
+#                 await conn.execute('''
+#                     INSERT INTO user_stats (user_id, streak, last_streak_update)
+#                     VALUES ($1, $2, $3)
+#                     ON CONFLICT (user_id) 
+#                     DO UPDATE SET 
+#                         streak = $2,
+#                         last_streak_update = $3
+#                 ''', user_id, new_streak, current_time)
+                
+#                 logging.info(f"Updated streak for user {user_id}: {new_streak}")
+                
+#     except Exception as e:
+#         logging.error(f"Error updating user streak: {e}")
+
 async def update_user_streak(user_id):
     try:
         async with DB_SEMAPHORE:
             async with bot.db.acquire() as conn:
-                today = get_ist_time().date()
+                ist_now = get_ist_time()
+                today = ist_now.date()
                 yesterday = today - timedelta(days=1)
                 
                 # Check if streak was already updated today
@@ -2118,29 +2269,28 @@ async def update_user_streak(user_id):
                 if last_update:
                     last_update_date = convert_to_ist(last_update).date()
                 
-                if last_update_date == today:
-                    return  # Already updated streak today
-                
-                # Check today's activity
+                # Check today's activity (in IST)
                 today_solved = await conn.fetchval('''
                     SELECT EXISTS(
-                        SELECT 1 FROM user_submissions
+                        SELECT 1 
+                        FROM user_submissions
                         WHERE user_id = $1 
                         AND is_correct = TRUE
-                        AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
+                        AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2::date
                     )
                 ''', user_id, today)
                 
                 if not today_solved:
                     return  # No streak update if no correct answers today
                 
-                # Check yesterday's activity
+                # Check yesterday's activity (in IST)
                 yesterday_solved = await conn.fetchval('''
                     SELECT EXISTS(
-                        SELECT 1 FROM user_submissions
+                        SELECT 1 
+                        FROM user_submissions
                         WHERE user_id = $1 
                         AND is_correct = TRUE
-                        AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2
+                        AND DATE(submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata') = $2::date
                     )
                 ''', user_id, yesterday)
                 
@@ -2148,18 +2298,20 @@ async def update_user_streak(user_id):
                 current_streak = await get_user_streak(user_id)
                 
                 # Update streak logic
-                if not last_update:
+                if not last_update or not current_streak:
                     # First time solving a question
                     new_streak = 1
+                elif last_update_date == today:
+                    # Already updated today, keep current streak
+                    return
                 elif yesterday_solved:
-                    # Continued streak
+                    # Continued streak from yesterday
                     new_streak = current_streak + 1
                 else:
                     # Broke the streak, but solved today
                     new_streak = 1
                 
                 # Update streak and last update timestamp in database
-                current_time = get_ist_time()
                 await conn.execute('''
                     INSERT INTO user_stats (user_id, streak, last_streak_update)
                     VALUES ($1, $2, $3)
@@ -2167,13 +2319,12 @@ async def update_user_streak(user_id):
                     DO UPDATE SET 
                         streak = $2,
                         last_streak_update = $3
-                ''', user_id, new_streak, current_time)
+                ''', user_id, new_streak, ist_now)
                 
                 logging.info(f"Updated streak for user {user_id}: {new_streak}")
                 
     except Exception as e:
         logging.error(f"Error updating user streak: {e}")
-
 
 user_locks = {}
 
